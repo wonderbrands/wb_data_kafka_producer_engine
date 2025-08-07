@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="followed_fields_view_tree" model="ir.ui.view">
+            <field name="name">followed_fields.view.tree</field>
+            <field name="model">model.follow</field>
+            <field name="arch" type="xml">
+                <tree string="Followed Fields">
+                    <field name="model" />
+                    <field name="topic" />
+                </tree>
+            </field>
+        </record>
+    </data>
+</odoo>

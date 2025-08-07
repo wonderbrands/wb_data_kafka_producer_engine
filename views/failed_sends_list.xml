@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="failed_sends_view_tree" model="ir.ui.view">
+            <field name="name">failed_sends.view.tree</field>
+            <field name="model">kafka.error</field>
+            <field name="arch" type="xml">
+                <tree string="Failed sends">
+                    <field name="error" />
+                    <field name="at" />
+                    <field name="msg" />
+                </tree>
+            </field>
+        </record>
+    </data>
+</odoo>

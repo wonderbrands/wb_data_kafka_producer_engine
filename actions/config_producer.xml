@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="action_config_producer" model="ir.actions.act_window">
+            <field name="view_mode">tree,form</field>
+            <field name="res_model">kafka.config</field>
+            <field name="view_id" ref="config_producer_view_tree"/>
+        </record>    
+    </data>
+</odoo>
