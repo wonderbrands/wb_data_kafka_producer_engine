@@ -14,7 +14,9 @@
                         <group>
                             <field name="description" />
                             <field name="is_ssl" />
-                            <field name="cert" />
+                            <field name="ssl_ca_attachment_id" />
+                            <field name="ssl_cert_attachment_id" />
+                            <field name="ssl_key_attachment_id" />
                         </group>
                     </sheet>
                 </form>

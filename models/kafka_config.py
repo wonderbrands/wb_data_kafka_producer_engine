@@ -10,4 +10,12 @@ class KafkaConfig(models.Model):
     bootstrap_server = fields.Char(string='Bootstrap Servers', required=True)
     description = fields.Text(string='Description')
     is_ssl = fields.Boolean(string='Use SSL', default=False)
-    cert = fields.Binary(string='Certificate')
+    ssl_ca_attachment_id = fields.Binary(
+        string="SSL CA Certificate File"
+    )
+    ssl_cert_attachment_id = fields.Binary(
+        string="SSL Client Certificate File"
+    )
+    ssl_key_attachment_id = fields.Binary(
+        string="SSL Client Private Key File"
+    )

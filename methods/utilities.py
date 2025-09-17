@@ -1,16 +1,30 @@
-import asyncio
 from io import BytesIO
 from kafka import KafkaProducer
+import logging
+import traceback
+
+_logger = logging.getLogger(__name__)
+
 
 class KafkaProducerUtilities:
-    def __init__(self, odoo_env, message, topic, server, is_ssl=False, cert=None):
+    def __init__(   self, 
+                    odoo_env, 
+                    message, 
+                    topic, 
+                    server, 
+                    is_ssl=False, 
+                    ssl_cert_attachment_id=None,
+                    ssl_key_attachment_id=None,  
+                    ssl_ca_attachment_id=None):
         self.env = odoo_env
         self.message = message
         self.topic = topic
         self.server = server
         self.is_ssl = is_ssl
-        self.cert = cert
-        self.producer = self.defineProducer()
+        self.ssl_cert_attachment_id = ssl_cert_attachment_id
+        self.ssl_key_attachment_id = ssl_key_attachment_id
+        self.ssl_ca_attachment_id = ssl_ca_attachment_id
+        
         
     def get_message(self):
         return self.message
@@ -26,30 +40,46 @@ class KafkaProducerUtilities:
 
     def get_is_ssl(self):
         return self.is_ssl
-
-    def get_cert(self):
-        return self.cert
     
     def set_message(self, message):
         self.message = message
+    
+    def set_topic(self, topic):
+        self.topic = topic
 
     def writeTmpCert(self):
-        with open('/tmp/global-bundle.pem', 'w') as f:
-            f.write(self.get_cert())
+        self.ssl_paths = {}
+        if self.ssl_cert_attachment_id:
+            self.ssl_paths['cert'] = '/tmp/ssl_cert.pem'
+            with open(self.ssl_paths['cert'], 'w') as cert_file:
+                cert_file.write(self.ssl_cert_attachment_id.decode('utf-8'))
+        if self.ssl_key_attachment_id:
+            self.ssl_paths['key'] = '/tmp/ssl_key.pem'
+            with open(self.ssl_paths['key'], 'w') as key_file:
+                key_file.write(self.ssl_key_attachment_id.decode('utf-8'))
+        if self.ssl_ca_attachment_id:
+            self.ssl_paths['ca'] = '/tmp/ssl_ca.pem'
+            with open(self.ssl_paths['ca'], 'w') as ca_file:
+                ca_file.write(self.ssl_ca_attachment_id.decode('utf-8'))
 
-    def defineProducer():
+    def defineProducer(self):
+        _logger.info("Defining Kafka Producer...")
+        _logger.info(f"Server: {self.get_server()}")
+        _logger.info(f"SSL: {self.get_is_ssl()}")
+
         config_producer = {}
-        config_producer['bootstrap.servers'] = self.get_server()
-        config_producer['security.protocol'] = 'SSL' if self.get_is_ssl() else 'PLAINTEXT'
+        config_producer['bootstrap_servers'] = self.get_server()
+        config_producer['security_protocol'] = 'SSL' if self.get_is_ssl() else 'PLAINTEXT'
         if self.get_is_ssl():
             self.writeTmpCert()
-            config_producer['ssl.ca.location'] = '/tmp/global-bundle.pem' 
+            config_producer['ssl_cafile'] = self.ssl_paths['ca']
+            config_producer['ssl_certfile'] = self.ssl_paths['cert']
+            config_producer['ssl_keyfile'] = self.ssl_paths['key']
 
-        producer = KafkaProducer(**config_producer)
-        return producer
+        self.producer = KafkaProducer(**config_producer)
 
 
-    async def sendMessage(self):
+    def sendMessage(self):
         #SEND NUDES 
         """
                ...gNMMM@@MMMNa+..
@@ -77,11 +107,12 @@ J@b ```JNWHHHHHHHHHHHHHHHHHHHHHHHHHHd@ ``````J@F
            `"MMNg...````````...+MMM"^
                `""WMMM@@@MM@M#""!"""
         try:
-            await producer.send(self.get_topic(), self.get_message())
+            self.producer.send(self.get_topic(), self.get_message().encode('utf-8'))
         except Exception as e:
-            print(e)
+            _logger.error(traceback.format_exc())
+            _logger.error(f"Error sending message to Kafka: {e}")
 
-    def kill():
+    def kill(self):
         producer.flush()
         producer.close()
         if os.path.exists('/tmp/global-bundle.pem'):

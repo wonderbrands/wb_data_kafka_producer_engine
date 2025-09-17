@@ -30,7 +30,7 @@
 
         'actions/config_producer.xml',
         'actions/failed_sends.xml',
-        'actions/followed_fields.xml',
+        #'actions/followed_fields.xml',
         
         'menu/root.xml',
         'menu/submenu.xml',
