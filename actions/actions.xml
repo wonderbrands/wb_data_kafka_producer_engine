@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="action_followed_fields" model="ir.actions.act_window.view">
+        <field name="view_mode">tree</field>
+        <field name="view_id" ref="wb_data_kafka_producer_followed_fields_list_view"/>
+    </record>
+
+    <record id="action_sends_log" model="ir.actions.act_window.view">
+        <field name="view_mode">tree</field>
+        <field name="view_id" ref="wb_data_kafka_producer_sends_log_list_view"/>
+    </record>
+
+</odoo>

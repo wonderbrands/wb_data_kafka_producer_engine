@@ -4,7 +4,7 @@
     <data>
         <menuitem
             id="wb_data_kafka_producer"
-            name="Kafka configuration"
+            name="Kafka Producer"
             sequence="100"
         />
     </data>

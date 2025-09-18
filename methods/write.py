@@ -2,7 +2,6 @@ import json
 import traceback
 import datetime
 from odoo import fields, models, api
-from . import utilities
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -10,25 +9,14 @@ _logger = logging.getLogger(__name__)
 class WriteInhereit(models.AbstractModel):
     _inherit = 'base'
 
-    _cached_kafka = None  # Class-level cache (per model, per worker)
-
-    def _get_kafka(self):
-        """Return a cached Kafka instance if available, else create one."""
-        if WriteInhereit._cached_kafka is None:
-            WriteInhereit._cached_kafka = self.kafka_instance()
-            _logger.info("Kafka instance initialized and cached.")
-        return WriteInhereit._cached_kafka
-
     def write(self, vals):
-        try:
-            _logger.info("*************************************")
-            _logger.info(f"Model: {self._name}")
-            _logger.info(f"Values: {vals}")
+        is_followed = self.env["followed.model"].search([("model.name", "=", self._name)], limit=1)
+        if is_followed:
+            try:
+                _logger.info("*************************************")
+                _logger.info(f"Model: {self._name}")
+                _logger.info(f"Values: {vals}")
 
-            kafka = self._get_kafka()
-            _logger.info(f"Kafka: {kafka}")
-
-            if kafka:
                 def convert(o):
                     if isinstance(o, (datetime.date, datetime.datetime)):
                         return o.isoformat()
@@ -68,31 +56,26 @@ class WriteInhereit(models.AbstractModel):
                     return processed
 
 
-                processed_vals = prepare_vals(vals)
-                processed_vals["odoo_internal_id"] = self.id
-                processed_vals["operation"] = "write"
-                processed_vals["by"] = self.env.user.name
-                processed_vals["timestamp"] = datetime.datetime.utcnow().isoformat()
+                    processed_vals = prepare_vals(vals)
+                    processed_vals["odoo_internal_id"] = self.id
+                    processed_vals["operation"] = "write"
+                    processed_vals["by"] = self.env.user.name
+                    processed_vals["timestamp"] = datetime.datetime.utcnow().isoformat()
 
-                message = json.dumps(processed_vals, default=convert)
+                    message = json.dumps(processed_vals, default=convert)
+                    self.env["kafka.message.handler"].create({
+                        "message": message,
+                        "topic": self._name,
+                        "operation_type": "update",
+                        "sent_status": "pending"
+                    })
 
-                kafka.set_message(message)
-                kafka.set_topic(self._name)
-                kafka.sendMessage()
 
-
-            _logger.info("*************************************")
+                _logger.info("*************************************")
+                return super().write(vals)
+            except Exception as e:
+                _logger.error(traceback.format_exc())
+                return super().write(vals)
+        else:
             return super().write(vals)
-        except Exception as e:
-            _logger.error(traceback.format_exc())
-            _logger.error(f"Error sending message to Kafka: {e}")
-            self.env["kafka.error"].create(
-                {
-                    "error": f"{str(e)} - {traceback.format_exc()}",
-                    "at": datetime.datetime.utcnow(),
-                    "msg": f"{self._name} - {vals}", 
-                }
-            )
-            return super().write(vals)
-
 

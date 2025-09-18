@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="wb_data_kafka_producer_followed_fields_list_view" model="ir.ui.view">
+        <field name="name">wb_data_kafka_producer_followed_fields_list_view</field>
+        <field name="model">followed.model</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="model" />
+            </tree>
+        </field>
+    </record>
+
+    <record id="wb_data_kafka_producer_followed_fields_form_view" model="ir.ui.view">
+        <field name="name">wb_data_kafka_producer_followed_fields_form_view</field>
+        <field name="model">followed.model</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <field name="model" />
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="wb_data_kafka_producer_sends_log_list_view" model="ir.ui.view">
+        <field name="name">wb_data_kafka_producer_sends_log_list_view</field>
+        <field name="model">kafka.message.handler</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="operation_type" />
+                <field name="topic" />
+                <field name="message" />
+                <field name="sent_status" />
+                <field name="sent_date" />
+                <field name="error_message" />
+            </tree>
+        </field>
+    </record>
+
+</odoo>

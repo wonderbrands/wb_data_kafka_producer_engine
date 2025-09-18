@@ -18,20 +18,29 @@
     'depends': ['base'],
 
     'external_dependencies': {
-        'python': ['kafka-python'],
+        'python': [
+            'aiokafka',
+            'async-timeout',
+            'aws-msk-iam-sasl-signer-python',
+            'boto3',
+            'botocore',
+            'click',
+            'confluent-kafka',
+            'jmespath',
+            'kafka-python',
+            'packaging',
+            'python-dateutil',
+            's3transfer',
+            'six',
+            'typing_extensions',
+            'urllib3',
+        ],
     },
 
-    'data': [
-        'views/config_producer_form.xml',
-        'views/config_producer_list.xml',
-        'views/failed_sends_list.xml',
-        'views/followed_fields_form.xml',
-        'views/followed_fields_list.xml',
 
-        'actions/config_producer.xml',
-        'actions/failed_sends.xml',
-        #'actions/followed_fields.xml',
-        
+    'data': [
+        'views/views.xml',
+        'actions/actions.xml',
         'menu/root.xml',
         'menu/submenu.xml',
     ],

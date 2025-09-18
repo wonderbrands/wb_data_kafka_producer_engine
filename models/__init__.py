@@ -1,3 +1,2 @@
-from . import kafka_config
-from . import model_follow
-from . import kafka_error
+from . import followed_models
+from . import kafka_message_handler

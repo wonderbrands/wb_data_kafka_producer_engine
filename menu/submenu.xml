@@ -1,26 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <data>
-        <!--<menuitem
-            id="wb_data_kafka_producer_followed_fields"
+        <menuitem
+            id="wb_data_kafka_producer_followed_fields_menu"
             name="Followed fields"
             action="action_followed_fields"
             parent="wb_data_kafka_producer"
             sequence="10"
-        />-->
-    
-        <menuitem
-            id="wb_data_kafka_producer_config_producer"
-            name="Configure"
-            action="action_config_producer"
-            parent="wb_data_kafka_producer"
-            sequence="20"
         />
-
         <menuitem
-            id="wb_data_kafka_producer_failed_sends"
-            name="Failed sends"
-            action="action_failed_sends"
+            id="wb_data_kafka_producer_sends_log_menu"
+            name="Sends log"
+            action="action_sends_log"
             parent="wb_data_kafka_producer"
             sequence="30"
         />
