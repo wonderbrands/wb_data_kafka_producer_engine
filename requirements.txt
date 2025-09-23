@@ -1,0 +1,15 @@
+aiokafka
+async-timeout
+aws-msk-iam-sasl-signer-python
+boto3
+botocore
+click
+confluent-kafka
+jmespath
+kafka-python
+packaging
+python-dateutil
+s3transfer
+six
+typing_extensions
+urllib3
