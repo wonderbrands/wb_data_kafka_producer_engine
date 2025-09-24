@@ -139,19 +139,17 @@ class KafkaAsyncMixin(models.AbstractModel):
                 _logger.error("Error preparing Kafka messages for write", exc_info=True)
         return super().write(vals)
 
-    # ------------------------------
-    # Overridden create
-    # ------------------------------
+    @api.model
     def create(self, vals):
-        vals_list = [vals] if isinstance(vals, dict) else vals
+        record = super().create(vals)
         is_followed = self.env["followed.model"].search([("model", "=", self._name)], limit=1)
-        records = super().create(vals_list)
         if is_followed:
             try:
-                self._create_kafka_message_async(records, vals_list=vals_list, operation_type="create")
+                self._create_kafka_message_async(record, vals_list=[vals], operation_type="create")
             except Exception:
                 _logger.error("Error preparing Kafka messages for create", exc_info=True)
-        return records
+        return record
+
 
     # ------------------------------
     # Overridden unlink

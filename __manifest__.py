@@ -39,6 +39,8 @@
 
 
     'data': [
+        'groups/kafka_admin.xml',
+        'security/access.csv',
         'views/views.xml',
         'actions/actions.xml',
         'menu/root.xml',
