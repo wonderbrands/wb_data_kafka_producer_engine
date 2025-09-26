@@ -132,12 +132,15 @@ class KafkaAsyncMixin(models.AbstractModel):
     # ------------------------------
     def write(self, vals):
         is_followed = self.env["followed.model"].search([("model", "=", self._name)], limit=1)
-        if is_followed:
+        res = super().write(vals) 
+        if is_followed and res:
             try:
-                self._create_kafka_message_async([self], [vals], operation_type="write")
+                vals_list = [vals] * len(self)  
+                self._create_kafka_message_async(self, vals_list=vals_list, operation_type="update")
             except Exception:
                 _logger.error("Error preparing Kafka messages for write", exc_info=True)
-        return super().write(vals)
+        return res
+
 
     @api.model
     def create(self, vals):
