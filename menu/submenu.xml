@@ -7,6 +7,7 @@
             action="action_followed_fields"
             parent="wb_data_kafka_producer"
             sequence="10"
+            groups="wb_data_kafka_producer_engine.group_kafka_admin"
         />
         <menuitem
             id="wb_data_kafka_producer_sends_log_menu"
@@ -14,6 +15,7 @@
             action="action_sends_log"
             parent="wb_data_kafka_producer"
             sequence="30"
+            groups="wb_data_kafka_producer_engine.group_kafka_admin"
         />
     </data>
 </odoo>

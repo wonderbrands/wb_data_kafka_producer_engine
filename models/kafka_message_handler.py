@@ -1,6 +1,7 @@
 import json
 import socket
 import os
+import logging
 from datetime import datetime
 from kafka import KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
@@ -8,6 +9,7 @@ from kafka.sasl.oauth import AbstractTokenProvider
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from odoo import api, fields, models
 
+_logger = logging.getLogger(__name__)
 
 class MSKTokenProvider(AbstractTokenProvider):
     def __init__(self, region):
@@ -38,7 +40,7 @@ class KafkaMessageHandler(models.Model):
     sent_date = fields.Datetime('Sent Date')
     error_message = fields.Text('Error Message')
 
-    def _get_kafka(self, topic_name='sale.order', partitions=1, replication_factor=None):
+    def _get_kafka(self, topic_name='sale.order', partitions=1, replication_factor=None, model_info=None):
         """Return cached producer or create a new one with topic creation."""
         if KafkaMessageHandler._cached_kafka is not None:
             return KafkaMessageHandler._cached_kafka
@@ -72,6 +74,21 @@ class KafkaMessageHandler(models.Model):
                 return KafkaMessageHandler._cached_kafka
 
         brokers = os.environ['BROKER_SERVERS'].split(',')
+        if model_info:
+            if model_info.use_uniques_bss:
+                brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers]
+            else:
+                brokers = brokers + [b['bootstrap_server'] for b in model_info.bootstrap_servers]
+
+        if len(brokers) == 0:
+            KafkaMessageHandler._cached_kafka = {
+                'producer': None,
+                'error': True,
+                'message': "No bootstrap servers found"
+            }
+            return KafkaMessageHandler._cached_kafka
+
+        # Create Kafka producer
         region = os.environ['AWS_REGION']
         tp = MSKTokenProvider(region)
 
@@ -105,6 +122,9 @@ class KafkaMessageHandler(models.Model):
         except Exception as e:
             print(f"⚠️ Could not create topic '{topic_name}': {e}")
 
+        _logger.info("================================")
+        _logger.info("Creating Kafka producer")
+        _logger.info(f"Brokers: {brokers}")
         # --- Create Kafka producer ---
         try:
             producer = KafkaProducer(
@@ -135,9 +155,13 @@ class KafkaMessageHandler(models.Model):
         return KafkaMessageHandler._cached_kafka
 
     def create(self, vals_list):
+        _logger.info("================================")
+        _logger.info("Creating Kafka messages")
         records = super().create(vals_list)
         for record in records:
-            kafka = self._get_kafka(topic_name=record.topic or 'sale.order')
+            kafka = self._get_kafka(
+                topic_name=record.topic,
+                model_info=self.env["followed.model"].search([("model", "=", self._name)], limit=1))
             record.sent_status = 'pending'
 
             if kafka and kafka['producer']:

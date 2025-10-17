@@ -2,3 +2,4 @@
 
 from . import models
 from . import methods
+from . import controllers

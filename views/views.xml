@@ -20,6 +20,10 @@
                     <group>
                         <field name="model" />
                     </group>
+                    <group name="bootstrap_servers" string="Bootstrap Servers">
+                        <field name="use_uniques_bss" />
+                        <field name="bootstrap_servers" />  
+                    </group>
                 </sheet>
             </form>
         </field>

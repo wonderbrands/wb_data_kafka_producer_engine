@@ -1,4 +1,5 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_followed_model_user,access.followed.model.user,model_followed_model,base.group_user,1,0,1,0
+access_followed_model_user,access.followed.model.user,model_followed_model,base.group_user,1,1,1,0
 access_kafka_message_handler_user,access.kafka.message.handler.user,model_kafka_message_handler,base.group_user,1,1,1,0
+access_kafka_message_bootstrap_serv,access.kafka.message.bootstarp.serv,model_bootstrap_servers,base.group_user,1,1,1,0
 access_ir_model_user,access.ir.model.user,base.model_ir_model,base.group_user,1,0,1,0
