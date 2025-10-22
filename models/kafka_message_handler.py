@@ -2,9 +2,11 @@ import json
 import socket
 import os
 import logging
+import time
 from datetime import datetime
 from kafka import KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
+from kafka.errors import TopicAlreadyExistsError
 from kafka.sasl.oauth import AbstractTokenProvider
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from odoo import api, fields, models
@@ -88,27 +90,27 @@ class KafkaMessageHandler(models.Model):
             }
             return KafkaMessageHandler._cached_kafka
 
-        # Create Kafka producer
         region = os.environ['AWS_REGION']
         tp = MSKTokenProvider(region)
 
-        # --- Try to create topic if it doesn't exist ---
+        # --- Create topic if it doesn't exist and WAIT for it to be ready ---
+        topic_created = False
         try:
             admin_client = KafkaAdminClient(
                 bootstrap_servers=brokers,
                 security_protocol='SASL_SSL',
                 sasl_mechanism='OAUTHBEARER',
                 sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-admin"
+                client_id=f"{socket.gethostname()}-admin",
+                request_timeout_ms=10000
             )
 
             existing_topics = admin_client.list_topics()
 
             if topic_name not in existing_topics:
-                # Determine safe replication factor
                 broker_count = len(brokers)
                 if not replication_factor:
-                    replication_factor = broker_count  # default to max safe
+                    replication_factor = min(3, broker_count)
                 safe_rf = min(replication_factor, broker_count)
 
                 topic = NewTopic(
@@ -116,15 +118,53 @@ class KafkaMessageHandler(models.Model):
                     num_partitions=partitions,
                     replication_factor=safe_rf
                 )
-                admin_client.create_topics([topic])
-                print(f"✅ Topic '{topic_name}' created (partitions={partitions}, replication_factor={safe_rf})")
+                admin_client.create_topics([topic], timeout_ms=10000)
+                _logger.info(f"Topic '{topic_name}' created (partitions={partitions}, replication_factor={safe_rf})")
+                topic_created = True
+            
             admin_client.close()
+
+            # CRITICAL: If topic was just created, wait for it to be ready
+            if topic_created:
+                _logger.info(f"Waiting for topic '{topic_name}' to be ready...")
+                max_wait = 30
+                start = time.time()
+                topic_ready = False
+                
+                while time.time() - start < max_wait:
+                    try:
+                        check_admin = KafkaAdminClient(
+                            bootstrap_servers=brokers,
+                            security_protocol='SASL_SSL',
+                            sasl_mechanism='OAUTHBEARER',
+                            sasl_oauth_token_provider=MSKTokenProvider(region),
+                            client_id=f"{socket.gethostname()}-check",
+                            request_timeout_ms=5000
+                        )
+                        topics = check_admin.list_topics()
+                        check_admin.close()
+                        
+                        if topic_name in topics:
+                            _logger.info(f"Topic '{topic_name}' is ready")
+                            topic_ready = True
+                            break
+                    except:
+                        pass
+                    
+                    time.sleep(1)
+                
+                if not topic_ready:
+                    _logger.warning(f"Topic '{topic_name}' may not be fully ready yet")
+
+        except TopicAlreadyExistsError:
+            _logger.info(f"Topic '{topic_name}' already exists")
         except Exception as e:
-            print(f"⚠️ Could not create topic '{topic_name}': {e}")
+            _logger.error(f"Could not create topic '{topic_name}': {e}")
 
         _logger.info("================================")
         _logger.info("Creating Kafka producer")
         _logger.info(f"Brokers: {brokers}")
+        
         # --- Create Kafka producer ---
         try:
             producer = KafkaProducer(
@@ -137,6 +177,8 @@ class KafkaMessageHandler(models.Model):
                 key_serializer=lambda k: k.encode('utf-8') if k else None,
                 acks=1,
                 retries=3,
+                max_block_ms=30000,  # Reduced from default 60s
+                request_timeout_ms=25000,
                 batch_size=1024,
                 linger_ms=5,
             )
