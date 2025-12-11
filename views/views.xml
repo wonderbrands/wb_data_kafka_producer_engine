@@ -4,10 +4,11 @@
     <record id="wb_data_kafka_producer_followed_fields_list_view" model="ir.ui.view">
         <field name="name">wb_data_kafka_producer_followed_fields_list_view</field>
         <field name="model">followed.model</field>
+        <field name="type">list</field>
         <field name="arch" type="xml">
-            <tree>
+            <list>
                 <field name="model" />
-            </tree>
+            </list>
         </field>
     </record>
 
@@ -36,6 +37,7 @@
     <record id="wb_data_kafka_producer_sends_log_list_view" model="ir.ui.view">
         <field name="name">wb_data_kafka_producer_sends_log_list_view</field>
         <field name="model">kafka.message.handler</field>
+        <field name="type">list</field>
         <field name="arch" type="xml">
             <tree>
                 <field name="operation_type" />
@@ -51,6 +53,7 @@
     <record id="wb_data_kafka_producer_dump" model="ir.ui.view">
         <field name="name">wb_data_kafka_producer_dump</field>
         <field name="model">dump</field>
+        <field name="type">list</field>
         <field name="arch" type="xml">
             <tree>
                 <field name="model" />
