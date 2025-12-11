@@ -31,7 +31,7 @@ class KafkaMessageHandler(models.Model):
     message = fields.Text('Message')
     topic = fields.Char('Topic')
     operation_type = fields.Selection(
-        [('create', 'Create'), ('update', 'Update'), ('delete', 'Delete')],
+        [('create', 'Create'), ('update', 'Update'), ('delete', 'Delete'), ('dump', 'Dump')],
         'Operation Type'
     )
     sent_status = fields.Selection(
@@ -202,14 +202,17 @@ class KafkaMessageHandler(models.Model):
         records = super().create(vals_list)
         for record in records:
             kafka = self._get_kafka(
-                topic_name=record.topic,
+                topic_name=f"{record.topic}-_-{data_like}",
                 model_info=self.env["followed.model"].search([("model", "=", self._name)], limit=1))
             record.sent_status = 'pending'
+            _logger.info(f"Creating Kafka message for {record.topic} with {record.message}")
+            data_like = record.data_like
+            record.pop("data_like")
 
             if kafka and kafka['producer']:
                 try:
                     kafka['producer'].send(
-                        topic=record.topic or 'sale.order',
+                        topic=f"{record.topic}-_-{data_like}",
                         value=record.message,
                         key=record.operation_type
                     )

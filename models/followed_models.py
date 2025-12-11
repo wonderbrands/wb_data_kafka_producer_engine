@@ -14,4 +14,6 @@ class FollowedModel(models.Model):
     model = fields.Many2one('ir.model', 'Model')
     bootstrap_servers = fields.One2many('bootstrap.servers', 'followed_model', 'Bootstrap Servers')
     use_uniques_bss = fields.Boolean('Use Uniques Bootstrap Servers')
+    api_like = fields.Boolean('API Like')
+    schema_like = fields.Boolean('Schema Like')
 

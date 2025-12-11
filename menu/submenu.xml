@@ -17,5 +17,14 @@
             sequence="30"
             groups="wb_data_kafka_producer_engine.group_kafka_admin"
         />
+
+        <menuitem
+            id="wb_data_kafka_producer_dumps"
+            name="Dump Model"
+            action="action_dumps"
+            parent="wb_data_kafka_producer"
+            sequence="40"
+            groups="wb_data_kafka_producer_engine.group_kafka_admin"
+        />
     </data>
 </odoo>

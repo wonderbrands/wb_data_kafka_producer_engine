@@ -24,6 +24,10 @@
                         <field name="use_uniques_bss" />
                         <field name="bootstrap_servers" />  
                     </group>
+                    <group name="data" string="Data like">
+                        <field name="api_like" />
+                        <field name="schema_like" />
+                    </group>
                 </sheet>
             </form>
         </field>
@@ -43,5 +47,32 @@
             </tree>
         </field>
     </record>
+
+    <record id="wb_data_kafka_producer_dump" model="ir.ui.view">
+        <field name="name">wb_data_kafka_producer_dump</field>
+        <field name="model">dump</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="model" />
+                <field name="since" />
+                <field name="progress" />
+                <field name="total" />
+            </tree>
+        </field>
+    </record>
+
+    <record id="wb_data_kafka_producer_dump_form" model="ir.ui.view">
+        <field name="name">wb_data_kafka_producer_dump_form</field>
+        <field name="model">dump</field>
+        <field name="arch" type="xml">
+            <form>
+                <field name="model" />
+                <field name="since" />
+                <field name="progress" />
+                <field name="total" />
+            </form>
+        </field>
+    </record>
+
 
 </odoo>

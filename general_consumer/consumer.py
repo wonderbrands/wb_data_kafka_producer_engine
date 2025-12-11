@@ -62,6 +62,8 @@ def create_table_if_not_exists(table_name, fields):
         "datetime": DateTime,
     }
 
+    
+
     table = Table(
         table_name, 
         metadata,

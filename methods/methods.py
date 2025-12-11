@@ -80,7 +80,7 @@ class KafkaAsyncMixin(models.AbstractModel):
 
         return processed
 
-    def _background_job(self, messages, topic, operation_type):
+    def _background_job(self, messages, topic, operation_type, data_like):
         """Worker executed in a thread with a fresh DB cursor"""
         if not messages:
             return
@@ -92,11 +92,12 @@ class KafkaAsyncMixin(models.AbstractModel):
                     "message": msg,
                     "topic": topic,
                     "operation_type": operation_type,
-                    "sent_status": "pending"
+                    "sent_status": "pending",
+                    "data_like": data_like,
                 })
             cr.commit()
 
-    def _create_kafka_message_async(self, records, vals_list=None, operation_type="update"):
+    def _create_kafka_message_async(self, records, vals_list, operation_type, data_like):
         """
         Prepare messages for records and submit to executor.
         For create/write, vals_list is required. For delete, pass None.
@@ -125,20 +126,30 @@ class KafkaAsyncMixin(models.AbstractModel):
                 }
                 messages.append(json.dumps(data, default=self._convert))
 
-        executor.submit(self._background_job, messages, records[0]._name if records else "unknown", operation_type)
+        executor.submit(self._background_job, messages, records[0]._name if records else "unknown", operation_type, data_like)
 
-    # ------------------------------
-    # Overridden write
-    # ------------------------------
+    def query_id(self, rec_id, model_name):
+        table = self.env[model_name]._table
+        query = f"SELECT * FROM {table} WHERE id = %s"
+        self.env.cr.execute(query, (rec_id,))
+        return self.env.cr.dictfetchone()
+
     def write(self, vals):
         is_followed = self.env["followed.model"].search([("model", "=", self._name)], limit=1)
         res = super().write(vals) 
         if is_followed and res:
-            try:
-                vals_list = [vals] * len(self)  
-                self._create_kafka_message_async(self, vals_list=vals_list, operation_type="update")
-            except Exception:
-                _logger.error("Error preparing Kafka messages for write", exc_info=True)
+            if is_followed.api_like:
+                try:
+                    vals_list = [vals] * len(self)  
+                    self._create_kafka_message_async(self, vals_list=vals_list, operation_type="update", data_like="api_like")
+                except Exception:
+                    _logger.error("Error preparing Kafka messages for write", exc_info=True)
+
+            if is_followed.schema_like:
+                try:
+                    self._create_kafka_message_async(self, vals_list=[self.query_id(record.id, record._name) for record in self], operation_type="update", data_like="schema_like")
+                except Exception:
+                    _logger.error("Error preparing Kafka messages for write", exc_info=True)
         return res
 
 
@@ -146,11 +157,18 @@ class KafkaAsyncMixin(models.AbstractModel):
     def create(self, vals):
         record = super().create(vals)
         is_followed = self.env["followed.model"].search([("model", "=", self._name)], limit=1)
-        if is_followed:
-            try:
-                self._create_kafka_message_async(record, vals_list=[vals], operation_type="create")
-            except Exception:
-                _logger.error("Error preparing Kafka messages for create", exc_info=True)
+        if is_followed: 
+            if is_followed.api_like:
+                try:
+                    self._create_kafka_message_async(record, vals_list=[vals], operation_type="create", data_like="api_like")
+                except Exception:
+                    _logger.error("Error preparing Kafka messages for create", exc_info=True)
+
+            if is_followed.schema_like:
+                try:
+                    self._create_kafka_message_async(record, vals_list=[self.query_id(record.id, record._name)], operation_type="create", data_like="schema_like")
+                except Exception:
+                    _logger.error("Error preparing Kafka messages for create", exc_info=True)
         return record
 
 
@@ -163,10 +181,18 @@ class KafkaAsyncMixin(models.AbstractModel):
             records_to_notify = list(self)  # copy before deletion
             result = super().unlink()
             if records_to_notify:
-                try:
-                    self._create_kafka_message_async(records_to_notify, vals_list=None, operation_type="delete")
-                except Exception:
-                    _logger.error("Error preparing Kafka messages for delete", exc_info=True)
+                if is_followed.api_like:
+                    try:
+                        self._create_kafka_message_async(records_to_notify, vals_list=None, operation_type="delete", data_like="api_like")
+                    except Exception:
+                        _logger.error("Error preparing Kafka messages for delete", exc_info=True)
+
+                if is_followed.schema_like:
+                    try:
+                        self._create_kafka_message_async(records_to_notify, vals_list=None, operation_type="delete", data_like="schema_like")
+                    except Exception:
+                        _logger.error("Error preparing Kafka messages for delete", exc_info=True)
+
             return result
         else:
             return super().unlink()
