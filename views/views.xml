@@ -39,14 +39,21 @@
         <field name="model">kafka.message.handler</field>
         <field name="type">list</field>
         <field name="arch" type="xml">
-            <tree>
+            <list>
+                <header>
+                    <button name="action_retry" 
+                            type="object" 
+                            string="Retry not sent" 
+                            class="btn-primary"
+                            display="always"  />
+                </header>
                 <field name="operation_type" />
                 <field name="topic" />
                 <field name="message" />
                 <field name="sent_status" />
                 <field name="sent_date" />
                 <field name="error_message" />
-            </tree>
+            </list>
         </field>
     </record>
 
@@ -55,12 +62,12 @@
         <field name="model">dump</field>
         <field name="type">list</field>
         <field name="arch" type="xml">
-            <tree>
+            <list>
                 <field name="model" />
                 <field name="since" />
                 <field name="progress" />
                 <field name="total" />
-            </tree>
+            </list>
         </field>
     </record>
 

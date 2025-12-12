@@ -2,7 +2,8 @@ import json
 import datetime
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from odoo import models, api, registry
+from odoo import models, api
+import odoo
 
 _logger = logging.getLogger(__name__)
 
@@ -84,18 +85,44 @@ class KafkaAsyncMixin(models.AbstractModel):
         """Worker executed in a thread with a fresh DB cursor"""
         if not messages:
             return
+        
         dbname = self.env.cr.dbname
-        with registry(dbname).cursor() as cr:
-            env = api.Environment(cr, self.env.uid, self.env.context)
-            for msg in messages:
-                env["kafka.message.handler"].create({
-                    "message": msg,
-                    "topic": topic,
-                    "operation_type": operation_type,
-                    "sent_status": "pending",
-                    "data_like": data_like,
-                })
-            cr.commit()
+        
+        try:
+            # Correct way to get registry
+            with odoo.registry(dbname).cursor() as cr:
+                # Use SUPERUSER_ID to avoid permission issues
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                
+                #_logger.info("========================================")
+                #_logger.info("Starting background job with %d messages", len(messages))
+                
+                for msg in messages:
+                    try:
+                        #_logger.info("Processing message: %s", msg)
+                        send = {
+                            "message": msg,
+                            "topic": f"{topic}-_-{data_like}",
+                            "operation_type": operation_type,
+                            "sent_status": "pending",
+                            "data_like": data_like,
+                        }
+                        #_logger.info("Data to create: %s", send)
+                        
+                        record = env["kafka.message.handler"].create(send)
+                        #_logger.info("Created record with ID: %s", record.id)
+                        
+                    except Exception as e:
+                        _logger.error("Failed to create kafka.message.handler record: %s", e, exc_info=True)
+                
+                cr.commit()
+                #_logger.info("Committed %d records successfully", len(messages))
+                #_logger.info("========================================")
+                
+        except Exception as e:
+            _logger.error("Background job failed completely: %s", e, exc_info=True)
+
+
 
     def _create_kafka_message_async(self, records, vals_list, operation_type, data_like):
         """
@@ -105,7 +132,10 @@ class KafkaAsyncMixin(models.AbstractModel):
         messages = []
         if vals_list:
             for record, vals in zip(records, vals_list):
-                processed_vals = self._prepare_vals(record, vals)
+                if data_like == 'api_like':
+                    processed_vals = self._prepare_vals(record, vals)
+                else:
+                    processed_vals = vals
                 processed_vals.update({
                     "odoo_internal_id": record.id,
                     "operation": operation_type,
@@ -126,18 +156,40 @@ class KafkaAsyncMixin(models.AbstractModel):
                 }
                 messages.append(json.dumps(data, default=self._convert))
 
+        #_logger.info("========================================")
+        #_logger.info("Sending Kafka messages for %s: %s", records)
+
         executor.submit(self._background_job, messages, records[0]._name if records else "unknown", operation_type, data_like)
 
     def query_id(self, rec_id, model_name):
-        table = self.env[model_name]._table
-        query = f"SELECT * FROM {table} WHERE id = %s"
-        self.env.cr.execute(query, (rec_id,))
-        return self.env.cr.dictfetchone()
+        model = self.env[model_name]
+        table = model._table
+        cr = self.env.cr
+        
+        # Use SQL identifier quoting for safety
+        cr.execute(f"SELECT * FROM {table} WHERE id = %s", (rec_id,))
+        row = cr.fetchone()
+        
+        if row is None:
+            return None
+        
+        # Get column names from cursor description
+        colnames = [desc[0] for desc in cr.description]
+        result = dict(zip(colnames, row))
+        #_logger.info("========================================")
+        #_logger.info("getting query: %s", result)        
+        return result
+
+
 
     def write(self, vals):
         is_followed = self.env["followed.model"].search([("model", "=", self._name)], limit=1)
         res = super().write(vals) 
+        
         if is_followed and res:
+            self.env.cr.flush()
+            self.env.cr.commit()
+            
             if is_followed.api_like:
                 try:
                     vals_list = [vals] * len(self)  
@@ -147,9 +199,11 @@ class KafkaAsyncMixin(models.AbstractModel):
 
             if is_followed.schema_like:
                 try:
+                    # Now the SQL query will see the updated data
                     self._create_kafka_message_async(self, vals_list=[self.query_id(record.id, record._name) for record in self], operation_type="update", data_like="schema_like")
                 except Exception:
                     _logger.error("Error preparing Kafka messages for write", exc_info=True)
+        
         return res
 
 

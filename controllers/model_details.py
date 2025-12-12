@@ -58,8 +58,11 @@ class ModelDetails(http.Controller):
             columns = request.env.cr.dictfetchall()
 
             data = {
-                "name": odoo_model.model,
-                "fields": columns
+                "name": model,
+                "fields": {
+                    column["column_name"]: column["data_type"]
+                    for column in columns
+                }
             }
 
 

@@ -10,6 +10,7 @@ from kafka.errors import TopicAlreadyExistsError
 from kafka.sasl.oauth import AbstractTokenProvider
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from odoo import api, fields, models
+from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
@@ -41,8 +42,9 @@ class KafkaMessageHandler(models.Model):
     )
     sent_date = fields.Datetime('Sent Date')
     error_message = fields.Text('Error Message')
+    data_like = fields.Char('Data Like')
 
-    def _get_kafka(self, topic_name='sale.order', partitions=1, replication_factor=None, model_info=None):
+    def _get_kafka(self, topic_name, partitions=1, replication_factor=None, model_info=None):
         """Return cached producer or create a new one with topic creation."""
         if KafkaMessageHandler._cached_kafka is not None:
             return KafkaMessageHandler._cached_kafka
@@ -119,14 +121,14 @@ class KafkaMessageHandler(models.Model):
                     replication_factor=safe_rf
                 )
                 admin_client.create_topics([topic], timeout_ms=10000)
-                _logger.info(f"Topic '{topic_name}' created (partitions={partitions}, replication_factor={safe_rf})")
+                #_logger.info(f"Topic '{topic_name}' created (partitions={partitions}, replication_factor={safe_rf})")
                 topic_created = True
             
             admin_client.close()
 
             # CRITICAL: If topic was just created, wait for it to be ready
             if topic_created:
-                _logger.info(f"Waiting for topic '{topic_name}' to be ready...")
+                #_logger.info(f"Waiting for topic '{topic_name}' to be ready...")
                 max_wait = 30
                 start = time.time()
                 topic_ready = False
@@ -145,7 +147,7 @@ class KafkaMessageHandler(models.Model):
                         check_admin.close()
                         
                         if topic_name in topics:
-                            _logger.info(f"Topic '{topic_name}' is ready")
+                            #_logger.info(f"Topic '{topic_name}' is ready")
                             topic_ready = True
                             break
                     except:
@@ -161,9 +163,9 @@ class KafkaMessageHandler(models.Model):
         except Exception as e:
             _logger.error(f"Could not create topic '{topic_name}': {e}")
 
-        _logger.info("================================")
-        _logger.info("Creating Kafka producer")
-        _logger.info(f"Brokers: {brokers}")
+        #_logger.info("================================")
+        #_logger.info("Creating Kafka producer")
+        #_logger.info(f"Brokers: {brokers}")
         
         # --- Create Kafka producer ---
         try:
@@ -197,22 +199,24 @@ class KafkaMessageHandler(models.Model):
         return KafkaMessageHandler._cached_kafka
 
     def create(self, vals_list):
-        _logger.info("================================")
-        _logger.info("Creating Kafka messages")
+        #_logger.info("================================")
+        #_logger.info("Creating Kafka messages")
         records = super().create(vals_list)
         for record in records:
             kafka = self._get_kafka(
-                topic_name=f"{record.topic}-_-{data_like}",
+                topic_name=f"{record.topic}",
                 model_info=self.env["followed.model"].search([("model", "=", self._name)], limit=1))
             record.sent_status = 'pending'
-            _logger.info(f"Creating Kafka message for {record.topic} with {record.message}")
+            #_logger.info(f"Creating Kafka message for {record.topic} with {record.message}")
             data_like = record.data_like
-            record.pop("data_like")
 
             if kafka and kafka['producer']:
                 try:
+                    #_logger.info(f"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                    #_logger.info(f"the topic is {record.topic}")
+                    #_logger.info(f"Sending Kafka message into topic {record.topic}-_-{data_like}")
                     kafka['producer'].send(
-                        topic=f"{record.topic}-_-{data_like}",
+                        topic=f"{record.topic}",
                         value=record.message,
                         key=record.operation_type
                     )
@@ -228,3 +232,27 @@ class KafkaMessageHandler(models.Model):
                     record.error_message = kafka['message']
 
         return records
+
+    def action_retry(self):
+        records_not_sent = self.search([('sent_status', '!=', 'sent')])
+        if records_not_sent:
+            for record in records_not_sent:
+                kafka = self._get_kafka(
+                    topic_name=f"{record.topic}",
+                    model_info=self.env["followed.model"].search([("model", "=", self._name)], limit=1))
+                data_like = record.data_like
+                if kafka and kafka['producer']:
+                    try:
+                        kafka['producer'].send(
+                            topic=f"{record.topic}",
+                            value=record.message,
+                            key=record.operation_type
+                        )
+                        kafka['producer'].flush()
+                        record.sent_status = 'sent'
+                        record.sent_date = datetime.now()
+                    except Exception as e:
+                        record.sent_status = 'failed'
+                        record.error_message = str(e)
+        else:
+            raise UserError("No records to retry")

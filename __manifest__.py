@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 {
-    'name': "Kafka producer engine",
+    'name': "Kafka Producer Engine",
 
     'summary': "Lists a group of models and fields that whenever a record is created or updated, it will be sent to Kafka",
 
@@ -13,7 +13,7 @@
     'website': "https://wonderbrands.odoo.com/",
 
     'category': 'Technical',
-    'version': '15.0',
+    'version': '18.0',
 
     'depends': ['base'],
 
