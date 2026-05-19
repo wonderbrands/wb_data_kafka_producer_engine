@@ -27,26 +27,31 @@
                             <span class="badge bg-secondary"><t t-esc="state.topics.length"/> topics</span>
                         </div>
                         <div class="list-group list-group-flush">
-                            <t t-foreach="state.topics" t-as="topic" t-key="topic">
+                            <t t-foreach="state.topics" t-as="topic" t-key="topic.name">
                                 <div class="list-group-item p-3">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <div class="fw-bold fs-5 text-primary"><t t-esc="topic"/></div>
+                                        <div class="d-flex align-items-center">
+                                            <div class="fw-bold fs-5 text-primary"><t t-esc="topic.name"/></div>
+                                            <span class="badge rounded-pill bg-info ms-2 text-white">
+                                                <t t-esc="topic.total_messages"/> messages
+                                            </span>
+                                        </div>
                                         <div>
-                                            <button class="btn btn-sm btn-primary me-2" t-on-click="() => this.loadMessages(topic)">
+                                            <button class="btn btn-sm btn-primary me-2" t-on-click="() => this.loadMessages(topic.name)">
                                                 <i class="fa fa-eye me-1"/> Last 4 Messages
                                             </button>
-                                            <button class="btn btn-sm btn-danger" t-on-click="() => this.deleteTopic(topic)">
+                                            <button class="btn btn-sm btn-danger" t-on-click="() => this.deleteTopic(topic.name)">
                                                 <i class="fa fa-trash"/>
                                             </button>
                                         </div>
                                     </div>
                                     
-                                    <div t-if="state.loadingMessages[topic]" class="mt-2 text-center py-2 border rounded bg-light">
+                                    <div t-if="state.loadingMessages[topic.name]" class="mt-2 text-center py-2 border rounded bg-light">
                                         <i class="fa fa-spinner fa-spin text-muted me-2"/> Loading messages...
                                     </div>
                                     
-                                    <div t-if="state.messages[topic]" class="mt-2">
-                                        <t t-if="state.messages[topic].length === 0">
+                                    <div t-if="state.messages[topic.name]" class="mt-2">
+                                        <t t-if="state.messages[topic.name].length === 0">
                                             <div class="alert alert-info py-2 mb-0 small text-center">No messages found in this topic.</div>
                                         </t>
                                         <div t-else="" class="table-responsive">
@@ -60,7 +65,7 @@
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    <t t-foreach="state.messages[topic]" t-as="msg" t-key="msg.offset">
+                                                    <t t-foreach="state.messages[topic.name]" t-as="msg" t-key="msg.offset">
                                                         <tr>
                                                             <td class="text-center"><t t-esc="msg.offset"/></td>
                                                             <td><t t-esc="msg.timestamp"/></td>

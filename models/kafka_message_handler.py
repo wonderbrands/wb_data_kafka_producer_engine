@@ -259,25 +259,59 @@ class KafkaMessageHandler(models.Model):
 
     @api.model
     def get_kafka_topics(self):
-        """Fetch all topics from Kafka"""
+        """Fetch all topics from Kafka with message counts"""
         # Trigger cached setup or get config
         kafka_info = self._get_kafka("dummy_topic") 
         if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
             return {'error': kafka_info.get('message')}
-        
+
         try:
             brokers = os.environ['BROKER_SERVERS'].split(',')
+            region = os.environ['AWS_REGION']
+            tp = MSKTokenProvider(region)
+
             admin_client = KafkaAdminClient(
                 bootstrap_servers=brokers,
                 security_protocol='SASL_SSL',
                 sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=MSKTokenProvider(os.environ['AWS_REGION']),
+                sasl_oauth_token_provider=tp,
                 client_id=f"{socket.gethostname()}-admin-query"
             )
-            topics = admin_client.list_topics()
+            topic_names = admin_client.list_topics()
             admin_client.close()
-            return sorted(topics)
+
+            # Now get counts for each topic using a consumer
+            consumer = KafkaConsumer(
+                bootstrap_servers=brokers,
+                security_protocol='SASL_SSL',
+                sasl_mechanism='OAUTHBEARER',
+                sasl_oauth_token_provider=tp,
+                client_id=f"{socket.gethostname()}-count-query"
+            )
+
+            result = []
+            for name in sorted(topic_names):
+                total_messages = 0
+                try:
+                    partitions = consumer.partitions_for_topic(name)
+                    if partitions:
+                        tps = [TopicPartition(name, p) for p in partitions]
+                        beg_offsets = consumer.beginning_offsets(tps)
+                        end_offsets = consumer.end_offsets(tps)
+                        for tp_obj in tps:
+                            total_messages += end_offsets[tp_obj] - beg_offsets[tp_obj]
+                except Exception as e:
+                    _logger.warning("Could not get count for topic %s: %s", name, e)
+
+                result.append({
+                    'name': name,
+                    'total_messages': total_messages
+                })
+
+            consumer.close()
+            return result
         except Exception as e:
+            _logger.error("Failed to get topics with counts: %s", e, exc_info=True)
             return {'error': str(e)}
 
     @api.model

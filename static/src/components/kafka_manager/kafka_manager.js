@@ -78,7 +78,7 @@ export class KafkaManager extends Component {
         this.state.loading = true;
         try {
             for (const topic of this.state.topics) {
-                await this.orm.call("kafka.message.handler", "delete_kafka_topic", [topic]);
+                await this.orm.call("kafka.message.handler", "delete_kafka_topic", [topic.name]);
             }
             this.notification.add("All topics deletion triggered", { type: "info" });
         } catch (e) {

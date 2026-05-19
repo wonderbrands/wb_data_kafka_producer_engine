@@ -72,7 +72,7 @@ class Dump(models.Model):
                             data = self._prepare_vals(rec, rec.read()[0])
                             self.env['kafka.message.handler'].create({
                                 'message': json.dumps(data, default=self._convert),
-                                'topic': model_name,
+                                'topic': f"{model_name}-_-api_like",
                                 'operation_type': 'dump',
                                 'sent_status': 'pending',
                                 'data_like': 'api_like'
@@ -82,7 +82,7 @@ class Dump(models.Model):
                             data = self.query_id(rec.id, rec._name)
                             self.env['kafka.message.handler'].create({
                                 'message': json.dumps(data, default=self._convert),
-                                'topic': model_name,
+                                'topic': f"{model_name}-_-schema_like",
                                 'operation_type': 'dump',
                                 'sent_status': 'pending',
                                 'data_like': 'schema_like'
