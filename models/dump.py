@@ -57,24 +57,16 @@ class Dump(models.Model):
             _logger.info("Starting dump of %s records from %s (IDs %s to %s)", 
                          total_count, model_name, self.start_id, self.end_id)
             
-            # Check topic existence for enabled modes
+            # Check topic existence for enabled modes (once per dump for efficiency)
             model_info = self.env["followed.model"].search([("model", "=", self.model.id)], limit=1)
             
-            api_topic_ok = False
             if self.api_like:
-                api_topic_ok = self.env['kafka.message.handler']._ensure_topic_exists(f"{model_name}-_-api_like", model_info=model_info)
-                if not api_topic_ok:
-                    _logger.error("Topic %s-_-api_like does not exist and could not be created.", model_name)
+                if not self.env['kafka.message.handler']._ensure_topic_exists(f"{model_name}-_-api_like", model_info=model_info):
+                    _logger.warning("Topic %s-_-api_like does not exist and could not be created. Records will be created as pending.", model_name)
 
-            schema_topic_ok = False
             if self.schema_like:
-                schema_topic_ok = self.env['kafka.message.handler']._ensure_topic_exists(f"{model_name}-_-schema_like", model_info=model_info)
-                if not schema_topic_ok:
-                    _logger.error("Topic %s-_-schema_like does not exist and could not be created.", model_name)
-
-            if not api_topic_ok and not schema_topic_ok:
-                _logger.warning("No valid topics found for dump. Aborting.")
-                return
+                if not self.env['kafka.message.handler']._ensure_topic_exists(f"{model_name}-_-schema_like", model_info=model_info):
+                    _logger.warning("Topic %s-_-schema_like does not exist and could not be created. Records will be created as pending.", model_name)
 
             # Process in batches
             batch_size = 100
@@ -87,7 +79,7 @@ class Dump(models.Model):
                 for rec in batch_records:
                     try:
                         # Process based on flags
-                        if self.api_like and api_topic_ok:
+                        if self.api_like:
                             data = self._prepare_vals(rec, rec.read()[0])
                             self.env['kafka.message.handler'].create({
                                 'message': json.dumps(data, default=self._convert),
@@ -97,7 +89,7 @@ class Dump(models.Model):
                                 'data_like': 'api_like'
                             })
 
-                        if self.schema_like and schema_topic_ok:
+                        if self.schema_like:
                             data = self.query_id(rec.id, rec._name)
                             self.env['kafka.message.handler'].create({
                                 'message': json.dumps(data, default=self._convert),

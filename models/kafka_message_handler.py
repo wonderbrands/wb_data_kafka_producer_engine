@@ -46,37 +46,58 @@ class KafkaMessageHandler(models.Model):
     error_message = fields.Text('Error Message')
     data_like = fields.Char('Data Like')
 
+    def _load_env(self):
+        """Load environment variables from .env file."""
+        path = os.path.abspath(__file__)
+        env_path = os.path.join(os.path.dirname(path), '.env')
+        if not os.path.isfile(env_path):
+            _logger.warning("Environment file not found at %s", env_path)
+            return False
+
+        # Load .env variables
+        try:
+            with open(env_path, 'r') as f:
+                loaded_vars = []
+                for line in f:
+                    line = line.strip()
+                    if line and '=' in line and not line.startswith('#'):
+                        name, value = line.split('=', 1)
+                        # Remove possible quotes
+                        value = value.strip('"').strip("'")
+                        os.environ[name] = value
+                        loaded_vars.append(name)
+            _logger.info("Loaded environment variables from .env: %s", ", ".join(loaded_vars))
+            return True
+        except Exception as e:
+            _logger.error("Failed to read .env file at %s: %s", env_path, e)
+            return False
+
     def _get_producer(self, model_info=None):
         """Return cached producer or create a new one."""
         if KafkaMessageHandler._cached_producer is not None:
             return {'producer': KafkaMessageHandler._cached_producer, 'error': False}
 
-        path = os.path.abspath(__file__)
-        env_path = os.path.join(os.path.dirname(path), '.env')
-        if not os.path.isfile(env_path):
-            return {'producer': None, 'error': True, 'message': "Environment file not found"}
-
-        # Load .env variables
-        with open(env_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and '=' in line:
-                    name, value = line.split('=', 1)
-                    os.environ[name] = value
+        if not os.environ.get('BROKER_SERVERS'):
+            _logger.info("BROKER_SERVERS not in environment, attempting to load .env")
+            self._load_env()
 
         required_vars = ['BROKER_SERVERS', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION']
-        for var in required_vars:
-            if var not in os.environ:
-                return {'producer': None, 'error': True, 'message': f"Environment variable {var} not found"}
+        missing_vars = [var for var in required_vars if not os.environ.get(var)]
+        if missing_vars:
+            msg = f"Missing environment variables: {', '.join(missing_vars)}"
+            _logger.error(msg)
+            return {'producer': None, 'error': True, 'message': msg}
 
         brokers = os.environ['BROKER_SERVERS'].split(',')
         if model_info:
             if model_info.use_uniques_bss:
-                brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers]
+                brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers if b['bootstrap_server']]
             else:
-                brokers = brokers + [b['bootstrap_server'] for b in model_info.bootstrap_servers]
+                # Filter out empty strings if any
+                extra_brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers if b['bootstrap_server']]
+                brokers = brokers + extra_brokers
 
-        if not brokers:
+        if not brokers or brokers == ['']:
             return {'producer': None, 'error': True, 'message': "No bootstrap servers found"}
 
         region = os.environ['AWS_REGION']
@@ -101,6 +122,7 @@ class KafkaMessageHandler(models.Model):
             KafkaMessageHandler._cached_producer = producer
             return {'producer': producer, 'error': False}
         except Exception as e:
+            _logger.error("Error creating Kafka producer: %s", e)
             return {'producer': None, 'error': True, 'message': f"Error creating producer: {e}"}
 
     def _ensure_topic_exists(self, topic_name, model_info=None):
@@ -108,17 +130,34 @@ class KafkaMessageHandler(models.Model):
         if topic_name in KafkaMessageHandler._known_topics:
             return True
 
+        if not os.environ.get('BROKER_SERVERS'):
+            _logger.info("BROKER_SERVERS not in environment during topic check, attempting to load .env")
+            self._load_env()
+
         brokers = os.environ.get('BROKER_SERVERS', '').split(',')
         if model_info:
             if model_info.use_uniques_bss:
-                brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers]
+                brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers if b['bootstrap_server']]
             else:
-                brokers = brokers + [b['bootstrap_server'] for b in model_info.bootstrap_servers]
+                extra_brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers if b['bootstrap_server']]
+                if brokers == ['']:
+                    brokers = extra_brokers
+                else:
+                    brokers = brokers + extra_brokers
         
-        if not brokers or brokers == ['']:
+        # Filter out empty strings from brokers list
+        brokers = [b for b in brokers if b]
+        
+        if not brokers:
+            _logger.error("No brokers configured for Kafka. Cannot ensure topic %s exists.", topic_name)
             return False
 
         region = os.environ.get('AWS_REGION')
+        if not region:
+            _logger.error("AWS_REGION not configured. Cannot ensure topic %s exists.", topic_name)
+            return False
+
+        _logger.info("Ensuring topic %s exists using brokers: %s", topic_name, brokers)
         tp = MSKTokenProvider(region)
 
         try:
@@ -133,11 +172,13 @@ class KafkaMessageHandler(models.Model):
 
             existing_topics = admin_client.list_topics()
             if topic_name in existing_topics:
+                _logger.info("Topic %s already exists in Kafka", topic_name)
                 KafkaMessageHandler._known_topics.add(topic_name)
                 admin_client.close()
                 return True
 
             # Create topic
+            _logger.info("Topic %s does not exist, attempting to create it", topic_name)
             broker_count = len(brokers)
             replication_factor = min(3, broker_count)
             
@@ -145,6 +186,7 @@ class KafkaMessageHandler(models.Model):
                 topic = NewTopic(name=topic_name, num_partitions=1, replication_factor=replication_factor)
                 admin_client.create_topics([topic], timeout_ms=10000)
                 KafkaMessageHandler._known_topics.add(topic_name)
+                _logger.info("Successfully created Kafka topic: %s with rf=%s", topic_name, replication_factor)
             except Exception as e:
                 _logger.warning("Failed to create topic %s with rf=%s: %s. Retrying with rf=1", 
                                topic_name, replication_factor, e)
@@ -152,6 +194,7 @@ class KafkaMessageHandler(models.Model):
                     topic = NewTopic(name=topic_name, num_partitions=1, replication_factor=1)
                     admin_client.create_topics([topic], timeout_ms=10000)
                     KafkaMessageHandler._known_topics.add(topic_name)
+                    _logger.info("Successfully created Kafka topic %s with rf=1", topic_name)
                 except Exception as e2:
                     _logger.error("Failed to create topic %s even with rf=1: %s", topic_name, e2)
                     admin_client.close()
