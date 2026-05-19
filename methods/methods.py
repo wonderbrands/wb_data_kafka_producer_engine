@@ -161,13 +161,15 @@ class KafkaAsyncMixin(models.AbstractModel):
 
         executor.submit(self._background_job, messages, records[0]._name if records else "unknown", operation_type, data_like)
 
-    def query_id(self, rec_id, model_name):
+    def query_id(self, rec_id, model_name, fields=None):
         model = self.env[model_name]
         table = model._table
         cr = self.env.cr
         
-        # Use SQL identifier quoting for safety
-        cr.execute(f"SELECT * FROM {table} WHERE id = %s", (rec_id,))
+        if not fields:
+            cr.execute(f"SELECT * FROM {table} WHERE id = %s", (rec_id,))
+        else:
+            cr.execute(f"SELECT {', '.join(fields)} FROM {table} WHERE id = %s", (rec_id,))
         row = cr.fetchone()
         
         if row is None:
