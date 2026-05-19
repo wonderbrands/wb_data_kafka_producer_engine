@@ -7,7 +7,7 @@ export class KafkaManager extends Component {
     static template = "wb_data_kafka_producer_engine.KafkaManager";
 
     setup() {
-        this.rpc = useService("rpc");
+        this.orm = useService("orm");
         this.notification = useService("notification");
         this.state = useState({
             topics: [],
@@ -24,12 +24,7 @@ export class KafkaManager extends Component {
     async loadTopics() {
         this.state.loading = true;
         try {
-            const result = await this.rpc("/web/dataset/call_kw/kafka.message.handler/get_kafka_topics", {
-                model: "kafka.message.handler",
-                method: "get_kafka_topics",
-                args: [],
-                kwargs: {},
-            });
+            const result = await this.orm.call("kafka.message.handler", "get_kafka_topics", []);
             if (result && result.error) {
                 this.notification.add(result.error, { type: "danger" });
                 this.state.topics = [];
@@ -46,12 +41,7 @@ export class KafkaManager extends Component {
     async loadMessages(topic) {
         this.state.loadingMessages[topic] = true;
         try {
-            const result = await this.rpc("/web/dataset/call_kw/kafka.message.handler/get_kafka_messages", {
-                model: "kafka.message.handler",
-                method: "get_kafka_messages",
-                args: [topic, 4],
-                kwargs: {},
-            });
+            const result = await this.orm.call("kafka.message.handler", "get_kafka_messages", [topic, 4]);
             if (result && result.error) {
                 this.notification.add(result.error, { type: "danger" });
             } else {
@@ -69,12 +59,7 @@ export class KafkaManager extends Component {
         if (!confirmed) return;
 
         try {
-            const result = await this.rpc("/web/dataset/call_kw/kafka.message.handler/delete_kafka_topic", {
-                model: "kafka.message.handler",
-                method: "delete_kafka_topic",
-                args: [topic],
-                kwargs: {},
-            });
+            const result = await this.orm.call("kafka.message.handler", "delete_kafka_topic", [topic]);
             if (result === true) {
                 this.notification.add(`Topic "${topic}" deleted successfully`, { type: "success" });
                 await this.loadTopics();
@@ -93,12 +78,7 @@ export class KafkaManager extends Component {
         this.state.loading = true;
         try {
             for (const topic of this.state.topics) {
-                await this.rpc("/web/dataset/call_kw/kafka.message.handler/delete_kafka_topic", {
-                    model: "kafka.message.handler",
-                    method: "delete_kafka_topic",
-                    args: [topic],
-                    kwargs: {},
-                });
+                await this.orm.call("kafka.message.handler", "delete_kafka_topic", [topic]);
             }
             this.notification.add("All topics deletion triggered", { type: "info" });
         } catch (e) {
