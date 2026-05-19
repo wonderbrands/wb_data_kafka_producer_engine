@@ -83,6 +83,10 @@
                         <field name="start_id" />
                         <field name="end_id" />
                     </group>
+                    <group name="data" string="Data like">
+                        <field name="api_like" />
+                        <field name="schema_like" />
+                    </group>
                     <group>
                         <field name="progress" widget="dump_progress_bar" />
                         <field name="total" />

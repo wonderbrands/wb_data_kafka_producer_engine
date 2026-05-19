@@ -16,6 +16,8 @@ class Dump(models.Model):
     model = fields.Many2one('ir.model', 'Model', required=True, ondelete='cascade')
     start_id = fields.Integer(string='Start ID', required=True, default=0)
     end_id = fields.Integer(string='End ID', required=True, default=0)
+    api_like = fields.Boolean('API Like', default=True)
+    schema_like = fields.Boolean('Schema Like', default=False)
     progress = fields.Integer(default=0, readonly=True)
     total = fields.Integer(default=0, readonly=True)
 
@@ -65,16 +67,26 @@ class Dump(models.Model):
                 
                 for rec in batch_records:
                     try:
-                        # Read all fields from the record
-                        message_data = rec.read()[0]
-                        
-                        # Create Kafka message directly in kafka.message.handler
-                        self.env['kafka.message.handler'].create({
-                            'message': json.dumps(message_data, default=str),
-                            'topic': model_name,
-                            'operation_type': 'dump',
-                            'sent_status': 'pending'
-                        })
+                        # Process based on flags
+                        if self.api_like:
+                            data = self._prepare_vals(rec, rec.read()[0])
+                            self.env['kafka.message.handler'].create({
+                                'message': json.dumps(data, default=self._convert),
+                                'topic': model_name,
+                                'operation_type': 'dump',
+                                'sent_status': 'pending',
+                                'data_like': 'api_like'
+                            })
+
+                        if self.schema_like:
+                            data = self.query_id(rec.id, rec._name)
+                            self.env['kafka.message.handler'].create({
+                                'message': json.dumps(data, default=self._convert),
+                                'topic': model_name,
+                                'operation_type': 'dump',
+                                'sent_status': 'pending',
+                                'data_like': 'schema_like'
+                            })
                         
                         progress += 1
                         
