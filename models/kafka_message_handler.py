@@ -4,7 +4,7 @@ import os
 import logging
 import time
 from datetime import datetime
-from kafka import KafkaProducer, KafkaAdminClient
+from kafka import KafkaProducer, KafkaAdminClient, KafkaConsumer, TopicPartition
 from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from kafka.sasl.oauth import AbstractTokenProvider
@@ -256,3 +256,105 @@ class KafkaMessageHandler(models.Model):
                         record.error_message = str(e)
         else:
             raise UserError("No records to retry")
+
+    @api.model
+    def get_kafka_topics(self):
+        """Fetch all topics from Kafka"""
+        # Trigger cached setup or get config
+        kafka_info = self._get_kafka("dummy_topic") 
+        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+            return {'error': kafka_info.get('message')}
+        
+        try:
+            brokers = os.environ['BROKER_SERVERS'].split(',')
+            admin_client = KafkaAdminClient(
+                bootstrap_servers=brokers,
+                security_protocol='SASL_SSL',
+                sasl_mechanism='OAUTHBEARER',
+                sasl_oauth_token_provider=MSKTokenProvider(os.environ['AWS_REGION']),
+                client_id=f"{socket.gethostname()}-admin-query"
+            )
+            topics = admin_client.list_topics()
+            admin_client.close()
+            return sorted(topics)
+        except Exception as e:
+            return {'error': str(e)}
+
+    @api.model
+    def get_kafka_messages(self, topic_name, count=4):
+        """Fetch the last N messages from a topic"""
+        kafka_info = self._get_kafka(topic_name)
+        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+            return {'error': kafka_info.get('message')}
+
+        try:
+            brokers = os.environ['BROKER_SERVERS'].split(',')
+            region = os.environ['AWS_REGION']
+            tp = MSKTokenProvider(region)
+
+            consumer = KafkaConsumer(
+                bootstrap_servers=brokers,
+                security_protocol='SASL_SSL',
+                sasl_mechanism='OAUTHBEARER',
+                sasl_oauth_token_provider=tp,
+                client_id=f"{socket.gethostname()}-consumer",
+                auto_offset_reset='earliest',
+                enable_auto_commit=False,
+                value_deserializer=lambda v: v.decode('utf-8') if v else None
+            )
+
+            partitions = consumer.partitions_for_topic(topic_name)
+            if not partitions:
+                consumer.close()
+                return []
+
+            messages = []
+            for p in partitions:
+                tp_obj = TopicPartition(topic_name, p)
+                consumer.assign([tp_obj])
+                
+                end_offsets = consumer.end_offsets([tp_obj])
+                end_offset = end_offsets[tp_obj]
+                
+                start_offset = max(0, end_offset - count)
+                consumer.seek(tp_obj, start_offset)
+                
+                batch = consumer.poll(timeout_ms=5000)
+                if tp_obj in batch:
+                    for msg in batch[tp_obj]:
+                        messages.append({
+                            'offset': msg.offset,
+                            'timestamp': datetime.fromtimestamp(msg.timestamp/1000.0).isoformat(),
+                            'key': msg.key.decode('utf-8') if msg.key else None,
+                            'value': msg.value
+                        })
+
+            consumer.close()
+            messages.sort(key=lambda x: x['offset'], reverse=True)
+            return messages[:count]
+        except Exception as e:
+            _logger.error("Failed to get messages: %s", e, exc_info=True)
+            return {'error': str(e)}
+
+    @api.model
+    def delete_kafka_topic(self, topic_name):
+        """Delete a topic from Kafka"""
+        kafka_info = self._get_kafka(topic_name)
+        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+            return {'error': kafka_info.get('message')}
+
+        try:
+            brokers = os.environ['BROKER_SERVERS'].split(',')
+            admin_client = KafkaAdminClient(
+                bootstrap_servers=brokers,
+                security_protocol='SASL_SSL',
+                sasl_mechanism='OAUTHBEARER',
+                sasl_oauth_token_provider=MSKTokenProvider(os.environ['AWS_REGION']),
+                client_id=f"{socket.gethostname()}-admin-delete"
+            )
+            admin_client.delete_topics([topic_name])
+            admin_client.close()
+            KafkaMessageHandler._cached_kafka = None
+            return True
+        except Exception as e:
+            return {'error': str(e)}

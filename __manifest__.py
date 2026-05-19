@@ -46,5 +46,13 @@
         'menu/root.xml',
         'menu/submenu.xml',
     ],
+    'assets': {
+        'web.assets_backend': [
+            'wb_data_kafka_producer_engine/static/src/components/dump_progress_bar/dump_progress_bar.js',
+            'wb_data_kafka_producer_engine/static/src/components/dump_progress_bar/dump_progress_bar.xml',
+            'wb_data_kafka_producer_engine/static/src/components/kafka_manager/kafka_manager.js',
+            'wb_data_kafka_producer_engine/static/src/components/kafka_manager/kafka_manager.xml',
+        ],
+    },
 }
 

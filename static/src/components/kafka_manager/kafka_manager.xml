@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="wb_data_kafka_producer_engine.KafkaManager">
+        <div class="o_kafka_manager p-4 bg-white" style="min-height: 100%;">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1 class="h3 mb-0">Kafka Manager</h1>
+                <div>
+                    <button class="btn btn-secondary me-2" t-on-click="loadTopics">
+                        <i class="fa fa-refresh me-1"/> Refresh Topics
+                    </button>
+                    <button class="btn btn-danger" t-on-click="deleteAllTopics">
+                        <i class="fa fa-trash me-1"/> Delete All Topics
+                    </button>
+                </div>
+            </div>
+
+            <div t-if="state.loading" class="text-center p-5">
+                <i class="fa fa-spinner fa-spin fa-3x text-muted"/>
+                <p class="mt-2">Loading topics...</p>
+            </div>
+
+            <div t-else="" class="row">
+                <div class="col-12">
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                            <strong>Topics</strong> 
+                            <span class="badge bg-secondary"><t t-esc="state.topics.length"/> topics</span>
+                        </div>
+                        <div class="list-group list-group-flush">
+                            <t t-foreach="state.topics" t-as="topic" t-key="topic">
+                                <div class="list-group-item p-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <div class="fw-bold fs-5 text-primary"><t t-esc="topic"/></div>
+                                        <div>
+                                            <button class="btn btn-sm btn-primary me-2" t-on-click="() => this.loadMessages(topic)">
+                                                <i class="fa fa-eye me-1"/> Last 4 Messages
+                                            </button>
+                                            <button class="btn btn-sm btn-danger" t-on-click="() => this.deleteTopic(topic)">
+                                                <i class="fa fa-trash"/>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    
+                                    <div t-if="state.loadingMessages[topic]" class="mt-2 text-center py-2 border rounded bg-light">
+                                        <i class="fa fa-spinner fa-spin text-muted me-2"/> Loading messages...
+                                    </div>
+                                    
+                                    <div t-if="state.messages[topic]" class="mt-2">
+                                        <t t-if="state.messages[topic].length === 0">
+                                            <div class="alert alert-info py-2 mb-0 small text-center">No messages found in this topic.</div>
+                                        </t>
+                                        <div t-else="" class="table-responsive">
+                                            <table class="table table-sm table-hover table-bordered mb-0 small" style="table-layout: fixed;">
+                                                <thead class="table-light">
+                                                    <tr>
+                                                        <th style="width: 80px;">Offset</th>
+                                                        <th style="width: 170px;">Timestamp</th>
+                                                        <th style="width: 120px;">Key</th>
+                                                        <th>Value (JSON)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <t t-foreach="state.messages[topic]" t-as="msg" t-key="msg.offset">
+                                                        <tr>
+                                                            <td class="text-center"><t t-esc="msg.offset"/></td>
+                                                            <td><t t-esc="msg.timestamp"/></td>
+                                                            <td class="text-truncate"><t t-esc="msg.key"/></td>
+                                                            <td class="text-break font-monospace" style="max-height: 100px; overflow-y: auto; display: block;">
+                                                                <t t-esc="msg.value"/>
+                                                            </td>
+                                                        </tr>
+                                                    </t>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </t>
+                            <div t-if="state.topics.length === 0" class="list-group-item text-center text-muted py-5">
+                                No topics found in Kafka.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </t>
+</templates>

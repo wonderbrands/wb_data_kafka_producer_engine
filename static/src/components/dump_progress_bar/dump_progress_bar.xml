@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="wb_data_kafka_producer_engine.DumpProgressBar">
+        <div class="o_dump_progress_bar w-100">
+            <div class="progress" style="height: 20px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated bg-info" 
+                     role="progressbar" 
+                     t-att-aria-valuenow="state.progress" 
+                     t-att-aria-valuemin="0" 
+                     t-att-aria-valuemax="state.total" 
+                     t-attf-style="width: {{percentage}}%;">
+                    <t t-if="percentage > 10">
+                        <t t-esc="percentage"/>%
+                    </t>
+                </div>
+            </div>
+            <div class="mt-1 small text-muted">
+                <t t-esc="state.progress"/> / <t t-esc="state.total"/> records processed
+            </div>
+        </div>
+    </t>
+</templates>

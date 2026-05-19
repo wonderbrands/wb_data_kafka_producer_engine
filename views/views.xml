@@ -64,8 +64,9 @@
         <field name="arch" type="xml">
             <list>
                 <field name="model" />
-                <field name="since" />
-                <field name="progress" />
+                <field name="start_id" />
+                <field name="end_id" />
+                <field name="progress" widget="dump_progress_bar" />
                 <field name="total" />
             </list>
         </field>
@@ -76,10 +77,17 @@
         <field name="model">dump</field>
         <field name="arch" type="xml">
             <form>
-                <field name="model" />
-                <field name="since" />
-                <field name="progress" />
-                <field name="total" />
+                <sheet>
+                    <group>
+                        <field name="model" />
+                        <field name="start_id" />
+                        <field name="end_id" />
+                    </group>
+                    <group>
+                        <field name="progress" widget="dump_progress_bar" />
+                        <field name="total" />
+                    </group>
+                </sheet>
             </form>
         </field>
     </record>
