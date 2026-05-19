@@ -94,6 +94,13 @@ class KafkaAsyncMixin(models.AbstractModel):
                 # Use SUPERUSER_ID to avoid permission issues
                 env = api.Environment(cr, odoo.SUPERUSER_ID, {})
                 
+                # Check if topic exists/can be created
+                full_topic = f"{topic}-_-{data_like}"
+                model_info = env["followed.model"].search([("model.model", "=", topic)], limit=1)
+                if not env["kafka.message.handler"]._ensure_topic_exists(full_topic, model_info=model_info):
+                    _logger.error("Topic %s does not exist and could not be created. Skipping %d messages.", full_topic, len(messages))
+                    return
+
                 #_logger.info("========================================")
                 #_logger.info("Starting background job with %d messages", len(messages))
                 

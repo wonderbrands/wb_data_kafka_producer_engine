@@ -26,8 +26,10 @@ class MSKTokenProvider(AbstractTokenProvider):
 class KafkaMessageHandler(models.Model):
     _name = 'kafka.message.handler'
     _description = 'Kafka Message Handler'
+    _order = 'sent_date desc, id desc'
 
-    _cached_kafka = None
+    _cached_producer = None
+    _known_topics = set()
 
     message = fields.Text('Message')
     topic = fields.Char('Topic')
@@ -44,20 +46,15 @@ class KafkaMessageHandler(models.Model):
     error_message = fields.Text('Error Message')
     data_like = fields.Char('Data Like')
 
-    def _get_kafka(self, topic_name, partitions=1, replication_factor=None, model_info=None):
-        """Return cached producer or create a new one with topic creation."""
-        if KafkaMessageHandler._cached_kafka is not None:
-            return KafkaMessageHandler._cached_kafka
+    def _get_producer(self, model_info=None):
+        """Return cached producer or create a new one."""
+        if KafkaMessageHandler._cached_producer is not None:
+            return {'producer': KafkaMessageHandler._cached_producer, 'error': False}
 
         path = os.path.abspath(__file__)
         env_path = os.path.join(os.path.dirname(path), '.env')
         if not os.path.isfile(env_path):
-            KafkaMessageHandler._cached_kafka = {
-                'producer': None,
-                'error': True,
-                'message': "Environment file not found"
-            }
-            return KafkaMessageHandler._cached_kafka
+            return {'producer': None, 'error': True, 'message': "Environment file not found"}
 
         # Load .env variables
         with open(env_path, 'r') as f:
@@ -70,12 +67,7 @@ class KafkaMessageHandler(models.Model):
         required_vars = ['BROKER_SERVERS', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION']
         for var in required_vars:
             if var not in os.environ:
-                KafkaMessageHandler._cached_kafka = {
-                    'producer': None,
-                    'error': True,
-                    'message': f"Environment variable {var} not found"
-                }
-                return KafkaMessageHandler._cached_kafka
+                return {'producer': None, 'error': True, 'message': f"Environment variable {var} not found"}
 
         brokers = os.environ['BROKER_SERVERS'].split(',')
         if model_info:
@@ -84,90 +76,12 @@ class KafkaMessageHandler(models.Model):
             else:
                 brokers = brokers + [b['bootstrap_server'] for b in model_info.bootstrap_servers]
 
-        if len(brokers) == 0:
-            KafkaMessageHandler._cached_kafka = {
-                'producer': None,
-                'error': True,
-                'message': "No bootstrap servers found"
-            }
-            return KafkaMessageHandler._cached_kafka
+        if not brokers:
+            return {'producer': None, 'error': True, 'message': "No bootstrap servers found"}
 
         region = os.environ['AWS_REGION']
         tp = MSKTokenProvider(region)
 
-        # --- Create topic if it doesn't exist and WAIT for it to be ready ---
-        topic_created = False
-        try:
-            admin_client = KafkaAdminClient(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-admin",
-                request_timeout_ms=10000
-            )
-
-            existing_topics = admin_client.list_topics()
-
-            if topic_name not in existing_topics:
-                broker_count = len(brokers)
-                if not replication_factor:
-                    replication_factor = min(3, broker_count)
-                safe_rf = min(replication_factor, broker_count)
-
-                topic = NewTopic(
-                    name=topic_name,
-                    num_partitions=partitions,
-                    replication_factor=safe_rf
-                )
-                admin_client.create_topics([topic], timeout_ms=10000)
-                #_logger.info(f"Topic '{topic_name}' created (partitions={partitions}, replication_factor={safe_rf})")
-                topic_created = True
-            
-            admin_client.close()
-
-            # CRITICAL: If topic was just created, wait for it to be ready
-            if topic_created:
-                #_logger.info(f"Waiting for topic '{topic_name}' to be ready...")
-                max_wait = 30
-                start = time.time()
-                topic_ready = False
-                
-                while time.time() - start < max_wait:
-                    try:
-                        check_admin = KafkaAdminClient(
-                            bootstrap_servers=brokers,
-                            security_protocol='SASL_SSL',
-                            sasl_mechanism='OAUTHBEARER',
-                            sasl_oauth_token_provider=MSKTokenProvider(region),
-                            client_id=f"{socket.gethostname()}-check",
-                            request_timeout_ms=5000
-                        )
-                        topics = check_admin.list_topics()
-                        check_admin.close()
-                        
-                        if topic_name in topics:
-                            #_logger.info(f"Topic '{topic_name}' is ready")
-                            topic_ready = True
-                            break
-                    except:
-                        pass
-                    
-                    time.sleep(1)
-                
-                if not topic_ready:
-                    _logger.warning(f"Topic '{topic_name}' may not be fully ready yet")
-
-        except TopicAlreadyExistsError:
-            _logger.info(f"Topic '{topic_name}' already exists")
-        except Exception as e:
-            _logger.error(f"Could not create topic '{topic_name}': {e}")
-
-        #_logger.info("================================")
-        #_logger.info("Creating Kafka producer")
-        #_logger.info(f"Brokers: {brokers}")
-        
-        # --- Create Kafka producer ---
         try:
             producer = KafkaProducer(
                 bootstrap_servers=brokers,
@@ -179,44 +93,93 @@ class KafkaMessageHandler(models.Model):
                 key_serializer=lambda k: k.encode('utf-8') if k else None,
                 acks=1,
                 retries=3,
-                max_block_ms=30000,  # Reduced from default 60s
+                max_block_ms=30000,
                 request_timeout_ms=25000,
                 batch_size=1024,
                 linger_ms=5,
             )
-            KafkaMessageHandler._cached_kafka = {
-                'producer': producer,
-                'error': False,
-                'message': None
-            }
+            KafkaMessageHandler._cached_producer = producer
+            return {'producer': producer, 'error': False}
         except Exception as e:
-            KafkaMessageHandler._cached_kafka = {
-                'producer': None,
-                'error': True,
-                'message': f"Error creating producer: {e}"
-            }
+            return {'producer': None, 'error': True, 'message': f"Error creating producer: {e}"}
 
-        return KafkaMessageHandler._cached_kafka
+    def _ensure_topic_exists(self, topic_name, model_info=None):
+        """Ensure topic exists, creating it if necessary."""
+        if topic_name in KafkaMessageHandler._known_topics:
+            return True
+
+        brokers = os.environ.get('BROKER_SERVERS', '').split(',')
+        if model_info:
+            if model_info.use_uniques_bss:
+                brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers]
+            else:
+                brokers = brokers + [b['bootstrap_server'] for b in model_info.bootstrap_servers]
+        
+        if not brokers or brokers == ['']:
+            return False
+
+        region = os.environ.get('AWS_REGION')
+        tp = MSKTokenProvider(region)
+
+        try:
+            admin_client = KafkaAdminClient(
+                bootstrap_servers=brokers,
+                security_protocol='SASL_SSL',
+                sasl_mechanism='OAUTHBEARER',
+                sasl_oauth_token_provider=tp,
+                client_id=f"{socket.gethostname()}-admin-check",
+                request_timeout_ms=10000
+            )
+
+            existing_topics = admin_client.list_topics()
+            if topic_name in existing_topics:
+                KafkaMessageHandler._known_topics.add(topic_name)
+                admin_client.close()
+                return True
+
+            # Create topic
+            broker_count = len(brokers)
+            replication_factor = min(3, broker_count)
+            
+            try:
+                topic = NewTopic(name=topic_name, num_partitions=1, replication_factor=replication_factor)
+                admin_client.create_topics([topic], timeout_ms=10000)
+                KafkaMessageHandler._known_topics.add(topic_name)
+            except Exception as e:
+                _logger.warning("Failed to create topic %s with rf=%s: %s. Retrying with rf=1", 
+                               topic_name, replication_factor, e)
+                try:
+                    topic = NewTopic(name=topic_name, num_partitions=1, replication_factor=1)
+                    admin_client.create_topics([topic], timeout_ms=10000)
+                    KafkaMessageHandler._known_topics.add(topic_name)
+                except Exception as e2:
+                    _logger.error("Failed to create topic %s even with rf=1: %s", topic_name, e2)
+                    admin_client.close()
+                    return False
+            
+            admin_client.close()
+            return True
+        except Exception as e:
+            _logger.error("Error in _ensure_topic_exists for %s: %s", topic_name, e)
+            return False
 
     def create(self, vals_list):
-        #_logger.info("================================")
-        #_logger.info("Creating Kafka messages")
         records = super().create(vals_list)
         for record in records:
-            kafka = self._get_kafka(
-                topic_name=f"{record.topic}",
-                model_info=self.env["followed.model"].search([("model", "=", self._name)], limit=1))
+            # Derive model name from topic (format is model_name-_-api_like or model_name-_-schema_like)
+            model_name = record.topic.split('-_-')[0] if record.topic else False
+            model_info = self.env["followed.model"].search([("model.model", "=", model_name)], limit=1)
+            
+            # Ensure topic exists before sending
+            self._ensure_topic_exists(record.topic, model_info=model_info)
+            
+            kafka = self._get_producer(model_info=model_info)
             record.sent_status = 'pending'
-            #_logger.info(f"Creating Kafka message for {record.topic} with {record.message}")
-            data_like = record.data_like
 
             if kafka and kafka['producer']:
                 try:
-                    #_logger.info(f"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                    #_logger.info(f"the topic is {record.topic}")
-                    #_logger.info(f"Sending Kafka message into topic {record.topic}-_-{data_like}")
                     kafka['producer'].send(
-                        topic=f"{record.topic}",
+                        topic=record.topic,
                         value=record.message,
                         key=record.operation_type
                     )
@@ -229,7 +192,7 @@ class KafkaMessageHandler(models.Model):
             else:
                 record.sent_status = 'not_configured'
                 if kafka:
-                    record.error_message = kafka['message']
+                    record.error_message = kafka.get('message')
 
         return records
 
@@ -237,14 +200,16 @@ class KafkaMessageHandler(models.Model):
         records_not_sent = self.search([('sent_status', '!=', 'sent')])
         if records_not_sent:
             for record in records_not_sent:
-                kafka = self._get_kafka(
-                    topic_name=f"{record.topic}",
-                    model_info=self.env["followed.model"].search([("model", "=", self._name)], limit=1))
-                data_like = record.data_like
+                # Derive model name from topic
+                model_name = record.topic.split('-_-')[0] if record.topic else False
+                model_info = self.env["followed.model"].search([("model.model", "=", model_name)], limit=1)
+                
+                self._ensure_topic_exists(record.topic, model_info=model_info)
+                kafka = self._get_producer(model_info=model_info)
                 if kafka and kafka['producer']:
                     try:
                         kafka['producer'].send(
-                            topic=f"{record.topic}",
+                            topic=record.topic,
                             value=record.message,
                             key=record.operation_type
                         )
