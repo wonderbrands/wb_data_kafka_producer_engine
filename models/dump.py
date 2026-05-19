@@ -2,6 +2,7 @@ from odoo import models, fields, api
 import logging
 import json
 import odoo
+import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 _logger = logging.getLogger(__name__)
@@ -81,6 +82,12 @@ class Dump(models.Model):
                         # Process based on flags
                         if self.api_like:
                             data = self._prepare_vals(rec, rec.read()[0])
+                            data.update({
+                                "odoo_internal_id": rec.id,
+                                "operation": "dump",
+                                "by": self.env.user.name or "Odoo System",
+                                "timestamp": datetime.datetime.utcnow().isoformat(),
+                            })
                             self.env['kafka.message.handler'].create({
                                 'message': json.dumps(data, default=self._convert),
                                 'topic': f"{model_name}-_-api_like",
@@ -91,6 +98,12 @@ class Dump(models.Model):
 
                         if self.schema_like:
                             data = self.query_id(rec.id, rec._name)
+                            data.update({
+                                "odoo_internal_id": rec.id,
+                                "operation": "dump",
+                                "by": self.env.user.name or "Odoo System",
+                                "timestamp": datetime.datetime.utcnow().isoformat(),
+                            })
                             self.env['kafka.message.handler'].create({
                                 'message': json.dumps(data, default=self._convert),
                                 'topic': f"{model_name}-_-schema_like",
