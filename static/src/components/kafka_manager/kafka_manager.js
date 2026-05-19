@@ -11,13 +11,20 @@ export class KafkaManager extends Component {
         this.notification = useService("notification");
         this.state = useState({
             topics: [],
+            groups: [],
             loading: true,
+            loadingGroups: true,
             messages: {},
             loadingMessages: {},
+            groupDetails: {},
+            loadingGroupDetails: {},
         });
 
         onWillStart(async () => {
-            await this.loadTopics();
+            await Promise.all([
+                this.loadTopics(),
+                this.loadGroups(),
+            ]);
         });
     }
 
@@ -35,6 +42,39 @@ export class KafkaManager extends Component {
             this.notification.add("Could not load Kafka topics", { type: "danger" });
         } finally {
             this.state.loading = false;
+        }
+    }
+
+    async loadGroups() {
+        this.state.loadingGroups = true;
+        try {
+            const result = await this.orm.call("kafka.message.handler", "get_kafka_consumer_groups", []);
+            if (result && result.error) {
+                this.notification.add(result.error, { type: "danger" });
+                this.state.groups = [];
+            } else {
+                this.state.groups = result || [];
+            }
+        } catch (e) {
+            this.notification.add("Could not load Kafka consumer groups", { type: "danger" });
+        } finally {
+            this.state.loadingGroups = false;
+        }
+    }
+
+    async loadGroupDetails(groupId) {
+        this.state.loadingGroupDetails[groupId] = true;
+        try {
+            const result = await this.orm.call("kafka.message.handler", "get_kafka_consumer_group_details", [groupId]);
+            if (result && result.error) {
+                this.notification.add(result.error, { type: "danger" });
+            } else {
+                this.state.groupDetails[groupId] = result || [];
+            }
+        } catch (e) {
+            this.notification.add(`Could not load details for group ${groupId}`, { type: "danger" });
+        } finally {
+            this.state.loadingGroupDetails[groupId] = false;
         }
     }
 

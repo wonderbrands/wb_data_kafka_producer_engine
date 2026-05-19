@@ -400,3 +400,89 @@ class KafkaMessageHandler(models.Model):
             return True
         except Exception as e:
             return {'error': str(e)}
+
+    @api.model
+    def get_kafka_consumer_groups(self):
+        """Fetch all consumer groups from Kafka"""
+        kafka_info = self._get_producer()
+        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+            return {'error': kafka_info.get('message')}
+
+        try:
+            brokers = os.environ['BROKER_SERVERS'].split(',')
+            region = os.environ['AWS_REGION']
+            tp = MSKTokenProvider(region)
+
+            admin_client = KafkaAdminClient(
+                bootstrap_servers=brokers,
+                security_protocol='SASL_SSL',
+                sasl_mechanism='OAUTHBEARER',
+                sasl_oauth_token_provider=tp,
+                client_id=f"{socket.gethostname()}-admin-groups"
+            )
+            groups = admin_client.list_consumer_groups()
+            admin_client.close()
+            
+            return sorted([g[0] for g in groups])
+        except Exception as e:
+            _logger.error("Failed to get consumer groups: %s", e, exc_info=True)
+            return {'error': str(e)}
+
+    @api.model
+    def get_kafka_consumer_group_details(self, group_id):
+        """Fetch details (offsets, lag) for a consumer group"""
+        kafka_info = self._get_producer()
+        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+            return {'error': kafka_info.get('message')}
+
+        try:
+            brokers = os.environ['BROKER_SERVERS'].split(',')
+            region = os.environ['AWS_REGION']
+            tp = MSKTokenProvider(region)
+
+            admin_client = KafkaAdminClient(
+                bootstrap_servers=brokers,
+                security_protocol='SASL_SSL',
+                sasl_mechanism='OAUTHBEARER',
+                sasl_oauth_token_provider=tp,
+                client_id=f"{socket.gethostname()}-admin-group-details"
+            )
+
+            offsets = admin_client.list_consumer_group_offsets(group_id)
+            
+            # Use a consumer to get end offsets
+            consumer = KafkaConsumer(
+                bootstrap_servers=brokers,
+                security_protocol='SASL_SSL',
+                sasl_mechanism='OAUTHBEARER',
+                sasl_oauth_token_provider=tp,
+                client_id=f"{socket.gethostname()}-lag-query"
+            )
+
+            details = []
+            for tp_obj, offset_and_metadata in offsets.items():
+                current_offset = offset_and_metadata.offset
+                
+                # Get end offset for this partition
+                end_offsets = consumer.end_offsets([tp_obj])
+                log_end_offset = end_offsets.get(tp_obj, 0)
+                
+                lag = max(0, log_end_offset - current_offset) if current_offset is not None else log_end_offset
+
+                details.append({
+                    'topic': tp_obj.topic,
+                    'partition': tp_obj.partition,
+                    'current_offset': current_offset,
+                    'log_end_offset': log_end_offset,
+                    'lag': lag
+                })
+
+            admin_client.close()
+            consumer.close()
+            
+            # Sort by topic and partition
+            details.sort(key=lambda x: (x['topic'], x['partition']))
+            return details
+        except Exception as e:
+            _logger.error("Failed to get group details for %s: %s", group_id, e, exc_info=True)
+            return {'error': str(e)}

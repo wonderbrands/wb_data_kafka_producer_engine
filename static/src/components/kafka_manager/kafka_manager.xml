@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <t t-name="wb_data_kafka_producer_engine.KafkaManager">
-        <div class="o_kafka_manager p-4 bg-white" style="min-height: 100%;">
+        <div class="o_kafka_manager p-4 bg-white h-100 overflow-auto">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h1 class="h3 mb-0">Kafka Manager</h1>
                 <div>
@@ -20,47 +20,46 @@
             </div>
 
             <div t-else="" class="row">
-                <div class="col-12">
-                    <div class="card shadow-sm">
+                <!-- Topics Section -->
+                <div class="col-md-6">
+                    <div class="card shadow-sm h-100">
                         <div class="card-header bg-light d-flex justify-content-between align-items-center">
-                            <strong>Topics</strong> 
+                            <strong class="text-uppercase small fw-bold">Topics</strong> 
                             <span class="badge bg-secondary"><t t-esc="state.topics.length"/> topics</span>
                         </div>
-                        <div class="list-group list-group-flush">
+                        <div class="list-group list-group-flush overflow-auto" style="max-height: 80vh;">
                             <t t-foreach="state.topics" t-as="topic" t-key="topic.name">
                                 <div class="list-group-item p-3">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
                                         <div class="d-flex align-items-center">
-                                            <div class="fw-bold fs-5 text-primary"><t t-esc="topic.name"/></div>
+                                            <div class="fw-bold fs-6 text-primary text-break"><t t-esc="topic.name"/></div>
                                             <span class="badge rounded-pill bg-info ms-2 text-white">
-                                                <t t-esc="topic.total_messages"/> messages
+                                                <t t-esc="topic.total_messages"/> msgs
                                             </span>
                                         </div>
-                                        <div>
-                                            <button class="btn btn-sm btn-primary me-2" t-on-click="() => this.loadMessages(topic.name)">
-                                                <i class="fa fa-eye me-1"/> Last 4 Messages
+                                        <div class="d-flex">
+                                            <button class="btn btn-sm btn-outline-primary me-1" title="Last 4 Messages" t-on-click="() => this.loadMessages(topic.name)">
+                                                <i class="fa fa-eye"/>
                                             </button>
-                                            <button class="btn btn-sm btn-danger" t-on-click="() => this.deleteTopic(topic.name)">
+                                            <button class="btn btn-sm btn-outline-danger" title="Delete Topic" t-on-click="() => this.deleteTopic(topic.name)">
                                                 <i class="fa fa-trash"/>
                                             </button>
                                         </div>
                                     </div>
                                     
                                     <div t-if="state.loadingMessages[topic.name]" class="mt-2 text-center py-2 border rounded bg-light">
-                                        <i class="fa fa-spinner fa-spin text-muted me-2"/> Loading messages...
+                                        <i class="fa fa-spinner fa-spin text-muted me-2"/> Loading...
                                     </div>
                                     
                                     <div t-if="state.messages[topic.name]" class="mt-2">
                                         <t t-if="state.messages[topic.name].length === 0">
-                                            <div class="alert alert-info py-2 mb-0 small text-center">No messages found in this topic.</div>
+                                            <div class="alert alert-info py-1 mb-0 small text-center">No messages.</div>
                                         </t>
                                         <div t-else="" class="table-responsive">
-                                            <table class="table table-sm table-hover table-bordered mb-0 small" style="table-layout: fixed;">
+                                            <table class="table table-sm table-hover table-bordered mb-0 extra-small" style="font-size: 0.75rem;">
                                                 <thead class="table-light">
                                                     <tr>
-                                                        <th style="width: 80px;">Offset</th>
-                                                        <th style="width: 170px;">Timestamp</th>
-                                                        <th style="width: 120px;">Key</th>
+                                                        <th style="width: 50px;">Off</th>
                                                         <th>Value (JSON)</th>
                                                     </tr>
                                                 </thead>
@@ -68,9 +67,7 @@
                                                     <t t-foreach="state.messages[topic.name]" t-as="msg" t-key="msg.offset">
                                                         <tr>
                                                             <td class="text-center"><t t-esc="msg.offset"/></td>
-                                                            <td><t t-esc="msg.timestamp"/></td>
-                                                            <td class="text-truncate"><t t-esc="msg.key"/></td>
-                                                            <td class="text-break font-monospace" style="max-height: 100px; overflow-y: auto; display: block;">
+                                                            <td class="text-break font-monospace">
                                                                 <t t-esc="msg.value"/>
                                                             </td>
                                                         </tr>
@@ -82,7 +79,71 @@
                                 </div>
                             </t>
                             <div t-if="state.topics.length === 0" class="list-group-item text-center text-muted py-5">
-                                No topics found in Kafka.
+                                No topics found.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Consumer Groups Section -->
+                <div class="col-md-6">
+                    <div class="card shadow-sm h-100">
+                        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                            <strong class="text-uppercase small fw-bold">Consumer Groups</strong>
+                            <span class="badge bg-secondary"><t t-esc="state.groups.length"/> groups</span>
+                        </div>
+                        <div class="list-group list-group-flush overflow-auto" style="max-height: 80vh;">
+                            <t t-if="state.loadingGroups" class="text-center p-3">
+                                <i class="fa fa-spinner fa-spin text-muted"/>
+                            </t>
+                            <t t-else="" t-foreach="state.groups" t-as="group" t-key="group">
+                                <div class="list-group-item p-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <div class="fw-bold fs-6 text-dark text-break"><t t-esc="group"/></div>
+                                        <button class="btn btn-sm btn-outline-info" title="Describe Group" t-on-click="() => this.loadGroupDetails(group)">
+                                            <i class="fa fa-info-circle me-1"/> Describe
+                                        </button>
+                                    </div>
+
+                                    <div t-if="state.loadingGroupDetails[group]" class="mt-2 text-center py-2 border rounded bg-light">
+                                        <i class="fa fa-spinner fa-spin text-muted me-2"/> Fetching details...
+                                    </div>
+
+                                    <div t-if="state.groupDetails[group]" class="mt-2">
+                                        <t t-if="state.groupDetails[group].length === 0">
+                                            <div class="alert alert-info py-1 mb-0 small text-center">No active offsets.</div>
+                                        </t>
+                                        <div t-else="" class="table-responsive">
+                                            <table class="table table-sm table-hover table-bordered mb-0 extra-small" style="font-size: 0.7rem;">
+                                                <thead class="table-dark">
+                                                    <tr>
+                                                        <th>Topic</th>
+                                                        <th style="width: 30px;">P</th>
+                                                        <th style="width: 50px;">Offset</th>
+                                                        <th style="width: 50px;">End</th>
+                                                        <th style="width: 50px;">Lag</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <t t-foreach="state.groupDetails[group]" t-as="detail" t-key="detail.topic + '-' + detail.partition">
+                                                        <tr t-att-class="detail.lag > 0 ? 'table-warning' : ''">
+                                                            <td class="text-truncate" style="max-width: 100px;" t-att-title="detail.topic">
+                                                                <t t-esc="detail.topic"/>
+                                                            </td>
+                                                            <td class="text-center"><t t-esc="detail.partition"/></td>
+                                                            <td class="text-end"><t t-esc="detail.current_offset"/></td>
+                                                            <td class="text-end"><t t-esc="detail.log_end_offset"/></td>
+                                                            <td class="text-end fw-bold"><t t-esc="detail.lag"/></td>
+                                                        </tr>
+                                                    </t>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </t>
+                            <div t-if="state.groups.length === 0" class="list-group-item text-center text-muted py-5">
+                                No consumer groups found.
                             </div>
                         </div>
                     </div>
