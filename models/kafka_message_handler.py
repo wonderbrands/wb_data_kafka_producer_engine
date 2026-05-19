@@ -226,7 +226,7 @@ class KafkaMessageHandler(models.Model):
     def get_kafka_topics(self):
         """Fetch all topics from Kafka with message counts"""
         # Trigger cached setup or get config
-        kafka_info = self._get_kafka("dummy_topic") 
+        kafka_info = self._get_producer() 
         if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
             return {'error': kafka_info.get('message')}
 
@@ -282,7 +282,7 @@ class KafkaMessageHandler(models.Model):
     @api.model
     def get_kafka_messages(self, topic_name, count=4):
         """Fetch the last N messages from a topic"""
-        kafka_info = self._get_kafka(topic_name)
+        kafka_info = self._get_producer()
         if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
             return {'error': kafka_info.get('message')}
 
@@ -338,7 +338,7 @@ class KafkaMessageHandler(models.Model):
     @api.model
     def delete_kafka_topic(self, topic_name):
         """Delete a topic from Kafka"""
-        kafka_info = self._get_kafka(topic_name)
+        kafka_info = self._get_producer()
         if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
             return {'error': kafka_info.get('message')}
 
