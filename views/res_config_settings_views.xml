@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.kafka.producer</field>
+        <field name="model">res.config.settings</field>
+        <field name="priority" eval="90"/>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form" position="inside">
+                <app data-string="Kafka Producer" string="Kafka Producer" name="wb_data_kafka_producer_engine">
+                    <block title="Kafka &amp; AWS MSK Configuration" name="kafka_msk_config">
+                        <setting string="Kafka Broker Servers" help="Bootstrap servers for the Kafka cluster.">
+                            <field name="kafka_producer_broker_servers" placeholder="e.g. b-1.msk...:9098,b-2.msk...:9098"/>
+                        </setting>
+                        <setting string="AWS Region" help="The region where your MSK cluster resides.">
+                            <field name="kafka_producer_aws_region"/>
+                        </setting>
+                        <setting string="AWS Access Key" help="Access Key ID for IAM authentication.">
+                            <field name="kafka_producer_aws_access_key_id"/>
+                        </setting>
+                        <setting string="AWS Secret Key" help="Secret Access Key for IAM authentication.">
+                            <field name="kafka_producer_aws_secret_access_key" password="True"/>
+                        </setting>
+                    </block>
+                </app>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="action_kafka_config_settings" model="ir.actions.act_window">
+        <field name="name">Settings</field>
+        <field name="type">ir.actions.act_window</field>
+        <field name="res_model">res.config.settings</field>
+        <field name="view_mode">form</field>
+        <field name="target">inline</field>
+        <field name="context">{'module': 'wb_data_kafka_producer_engine'}</field>
+    </record>
+
+    <menuitem id="menu_kafka_config_settings"
+        name="Settings"
+        parent="wb_data_kafka_producer"
+        action="action_kafka_config_settings"
+        sequence="100"/>
+</odoo>

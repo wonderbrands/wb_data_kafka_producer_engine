@@ -41,6 +41,7 @@
     'data': [
         'groups/kafka_admin.xml',
         'security/ir.model.access.csv',
+        'views/res_config_settings_views.xml',
         'views/views.xml',
         'actions/actions.xml',
         'menu/root.xml',

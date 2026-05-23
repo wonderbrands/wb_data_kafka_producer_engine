@@ -46,61 +46,57 @@ class KafkaMessageHandler(models.Model):
     error_message = fields.Text('Error Message')
     data_like = fields.Char('Data Like')
 
-    def _load_env(self):
-        """Load environment variables from .env file."""
-        path = os.path.abspath(__file__)
-        env_path = os.path.join(os.path.dirname(path), '.env')
-        if not os.path.isfile(env_path):
-            _logger.warning("Environment file not found at %s", env_path)
-            return False
+    def _get_kafka_config(self):
+        """Retrieve Kafka configuration and ensure os.environ is set for AWS."""
+        Config = self.env['ir.config_parameter'].sudo()
+        brokers = Config.get_param('kafka_producer.broker_servers', '')
+        aws_access_key = Config.get_param('kafka_producer.aws_access_key_id', '')
+        aws_secret_key = Config.get_param('kafka_producer.aws_secret_access_key', '')
+        aws_region = Config.get_param('kafka_producer.aws_region', 'us-east-1')
 
-        # Load .env variables
-        try:
-            with open(env_path, 'r') as f:
-                loaded_vars = []
-                for line in f:
-                    line = line.strip()
-                    if line and '=' in line and not line.startswith('#'):
-                        name, value = line.split('=', 1)
-                        # Remove possible quotes
-                        value = value.strip('"').strip("'")
-                        os.environ[name] = value
-                        loaded_vars.append(name)
-            _logger.info("Loaded environment variables from .env: %s", ", ".join(loaded_vars))
-            return True
-        except Exception as e:
-            _logger.error("Failed to read .env file at %s: %s", env_path, e)
-            return False
+        if aws_access_key:
+            os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key
+        if aws_secret_key:
+            os.environ['AWS_SECRET_ACCESS_KEY'] = aws_secret_key
+        if aws_region:
+            os.environ['AWS_REGION'] = aws_region
+
+        return {
+            'brokers': [b.strip() for b in brokers.split(',') if b.strip()],
+            'region': aws_region,
+            'aws_access_key': aws_access_key,
+            'aws_secret_key': aws_secret_key,
+        }
 
     def _get_producer(self, model_info=None):
         """Return cached producer or create a new one."""
         if KafkaMessageHandler._cached_producer is not None:
             return {'producer': KafkaMessageHandler._cached_producer, 'error': False}
 
-        if not os.environ.get('BROKER_SERVERS'):
-            _logger.info("BROKER_SERVERS not in environment, attempting to load .env")
-            self._load_env()
+        config = self._get_kafka_config()
+        brokers = config['brokers']
+        region = config['region']
 
-        required_vars = ['BROKER_SERVERS', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION']
-        missing_vars = [var for var in required_vars if not os.environ.get(var)]
-        if missing_vars:
-            msg = f"Missing environment variables: {', '.join(missing_vars)}"
+        if not brokers or not config['aws_access_key'] or not config['aws_secret_key'] or not region:
+            missing = []
+            if not brokers: missing.append("BROKER_SERVERS")
+            if not config['aws_access_key']: missing.append("AWS_ACCESS_KEY_ID")
+            if not config['aws_secret_key']: missing.append("AWS_SECRET_ACCESS_KEY")
+            if not region: missing.append("AWS_REGION")
+            msg = f"Missing configuration: {', '.join(missing)}"
             _logger.error(msg)
             return {'producer': None, 'error': True, 'message': msg}
 
-        brokers = os.environ['BROKER_SERVERS'].split(',')
         if model_info:
             if model_info.use_uniques_bss:
                 brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers if b['bootstrap_server']]
             else:
-                # Filter out empty strings if any
                 extra_brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers if b['bootstrap_server']]
                 brokers = brokers + extra_brokers
 
-        if not brokers or brokers == ['']:
+        if not brokers:
             return {'producer': None, 'error': True, 'message': "No bootstrap servers found"}
 
-        region = os.environ['AWS_REGION']
         tp = MSKTokenProvider(region)
 
         try:
@@ -130,20 +126,16 @@ class KafkaMessageHandler(models.Model):
         if topic_name in KafkaMessageHandler._known_topics:
             return True
 
-        if not os.environ.get('BROKER_SERVERS'):
-            _logger.info("BROKER_SERVERS not in environment during topic check, attempting to load .env")
-            self._load_env()
+        config = self._get_kafka_config()
+        brokers = config['brokers']
+        region = config['region']
 
-        brokers = os.environ.get('BROKER_SERVERS', '').split(',')
         if model_info:
             if model_info.use_uniques_bss:
                 brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers if b['bootstrap_server']]
             else:
                 extra_brokers = [b['bootstrap_server'] for b in model_info.bootstrap_servers if b['bootstrap_server']]
-                if brokers == ['']:
-                    brokers = extra_brokers
-                else:
-                    brokers = brokers + extra_brokers
+                brokers = brokers + extra_brokers
         
         # Filter out empty strings from brokers list
         brokers = [b for b in brokers if b]
@@ -152,7 +144,6 @@ class KafkaMessageHandler(models.Model):
             _logger.error("No brokers configured for Kafka. Cannot ensure topic %s exists.", topic_name)
             return False
 
-        region = os.environ.get('AWS_REGION')
         if not region:
             _logger.error("AWS_REGION not configured. Cannot ensure topic %s exists.", topic_name)
             return False
@@ -270,12 +261,13 @@ class KafkaMessageHandler(models.Model):
         """Fetch all topics from Kafka with message counts"""
         # Trigger cached setup or get config
         kafka_info = self._get_producer() 
-        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+        if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}
 
         try:
-            brokers = os.environ['BROKER_SERVERS'].split(',')
-            region = os.environ['AWS_REGION']
+            config = self._get_kafka_config()
+            brokers = config['brokers']
+            region = config['region']
             tp = MSKTokenProvider(region)
 
             admin_client = KafkaAdminClient(
@@ -326,12 +318,13 @@ class KafkaMessageHandler(models.Model):
     def get_kafka_messages(self, topic_name, count=4):
         """Fetch the last N messages from a topic"""
         kafka_info = self._get_producer()
-        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+        if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}
 
         try:
-            brokers = os.environ['BROKER_SERVERS'].split(',')
-            region = os.environ['AWS_REGION']
+            config = self._get_kafka_config()
+            brokers = config['brokers']
+            region = config['region']
             tp = MSKTokenProvider(region)
 
             consumer = KafkaConsumer(
@@ -382,16 +375,17 @@ class KafkaMessageHandler(models.Model):
     def delete_kafka_topic(self, topic_name):
         """Delete a topic from Kafka"""
         kafka_info = self._get_producer()
-        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+        if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}
 
         try:
-            brokers = os.environ['BROKER_SERVERS'].split(',')
+            config = self._get_kafka_config()
+            brokers = config['brokers']
             admin_client = KafkaAdminClient(
                 bootstrap_servers=brokers,
                 security_protocol='SASL_SSL',
                 sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=MSKTokenProvider(os.environ['AWS_REGION']),
+                sasl_oauth_token_provider=MSKTokenProvider(config['region']),
                 client_id=f"{socket.gethostname()}-admin-delete"
             )
             admin_client.delete_topics([topic_name])
@@ -405,12 +399,13 @@ class KafkaMessageHandler(models.Model):
     def get_kafka_consumer_groups(self):
         """Fetch all consumer groups from Kafka"""
         kafka_info = self._get_producer()
-        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+        if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}
 
         try:
-            brokers = os.environ['BROKER_SERVERS'].split(',')
-            region = os.environ['AWS_REGION']
+            config = self._get_kafka_config()
+            brokers = config['brokers']
+            region = config['region']
             tp = MSKTokenProvider(region)
 
             admin_client = KafkaAdminClient(
@@ -432,12 +427,13 @@ class KafkaMessageHandler(models.Model):
     def get_kafka_consumer_group_details(self, group_id):
         """Fetch details (offsets, lag) for a consumer group"""
         kafka_info = self._get_producer()
-        if kafka_info.get('error') and not os.environ.get('BROKER_SERVERS'):
+        if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}
 
         try:
-            brokers = os.environ['BROKER_SERVERS'].split(',')
-            region = os.environ['AWS_REGION']
+            config = self._get_kafka_config()
+            brokers = config['brokers']
+            region = config['region']
             tp = MSKTokenProvider(region)
 
             admin_client = KafkaAdminClient(

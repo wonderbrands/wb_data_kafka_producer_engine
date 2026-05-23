@@ -32,33 +32,30 @@ Librerías clave:
 
 ## Instalación y Configuración
 
-### 1. Preparar el entorno (.env)
-
-El módulo requiere variables de entorno para conectarse a AWS MSK. Debes crear un archivo `.env` dentro del directorio `models/` del módulo.
-
-Puedes guiarte por el archivo `models/env.template`:
-
-```env
-BROKER_SERVERS=your-broker-1:9098,your-broker-2:9098
-AWS_ACCESS_KEY_ID=TU_ACCESS_KEY
-AWS_SECRET_ACCESS_KEY=TU_SECRET_KEY
-AWS_REGION=us-east-1
-```
-
-### 2. Instalar el módulo en Odoo
+### 1. Instalar el módulo en Odoo
 
 1. Copia la carpeta `wb_data_kafka_producer_engine` a tu directorio de `addons`.
 2. Actualiza la lista de aplicaciones en Odoo.
 3. Busca "Kafka Producer Engine" e instálalo.
 
-### 3. Configuración en la Interfaz
+### 2. Configuración en la Interfaz
 
 Una vez instalado, aparecerá un nuevo menú llamado **Kafka**.
 
-1. **Followed Models**: Define qué modelos quieres monitorear (ej. `res.partner`, `sale.order`).
+1. **Configuración Global (Settings)**:
+   - Ve a **Kafka > Settings** (o a Configuración General de Odoo).
+   - Busca la sección **Kafka & AWS MSK Configuration**.
+   - Ingresa los siguientes valores:
+     - **Kafka Broker Servers**: Lista separada por comas de tus brokers (ej. `b-1.msk...:9098,b-2.msk...:9098`).
+     - **AWS Region**: La región de tu clúster (ej. `us-east-1`).
+     - **AWS Access Key**: ID de llave de acceso de AWS.
+     - **AWS Secret Key**: Llave secreta de AWS.
+
+2. **Followed Models**: Define qué modelos quieres monitorear (ej. `res.partner`, `sale.order`).
    - Activa `API Like` o `Schema Like` según tu necesidad.
-   - Opcionalmente, puedes definir servidores bootstrap específicos por modelo si difieren del global en el `.env`.
-2. **Kafka Message Handler**: Aquí puedes ver el historial de mensajes enviados, su contenido JSON y su estado de entrega.
+   - Opcionalmente, puedes definir servidores bootstrap específicos por modelo si difieren del global.
+
+3. **Kafka Message Handler**: Aquí puedes ver el historial de mensajes enviados, su contenido JSON y su estado de entrega.
 
 ## Funcionamiento Técnico
 
@@ -83,5 +80,5 @@ Retorna un JSON con los campos y sus tipos de datos.
 - `controllers/model_details.py`: Endpoint API para detalles de esquemas.
 
 ## Notas de Seguridad
-- Las credenciales de AWS se cargan desde el archivo `.env` en `models/`. Asegúrate de que este archivo no sea público y esté incluido en el `.gitignore`.
+- Las credenciales de AWS se almacenan de forma segura en los parámetros del sistema de Odoo (`ir.config_parameter`).
 - Se recomienda usar roles de IAM con permisos mínimos necesarios (Publish en los tópicos correspondientes).
