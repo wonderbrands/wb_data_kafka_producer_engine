@@ -1,4 +1,5 @@
-from odoo import models, fields, api
+from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError
 import logging
 import json
 import odoo
@@ -22,11 +23,37 @@ class Dump(models.Model):
     progress = fields.Integer(default=0, readonly=True)
     total = fields.Integer(default=0, readonly=True)
 
+    @api.constrains('model', 'start_id', 'end_id')
+    def _check_ids_exist(self):
+        for record in self:
+            if not record.model:
+                continue
+            model_name = record.model.model
+            
+            if record.start_id <= 0:
+                raise ValidationError(_("El ID de inicio debe ser mayor a 0."))
+            if record.end_id <= 0:
+                raise ValidationError(_("El ID del final debe ser mayor a 0."))
+            if record.start_id > record.end_id:
+                raise ValidationError(_("El ID de inicio no puede ser mayor que el ID del final."))
+            
+            # Check existence of start_id
+            start_record = self.env[model_name].search([('id', '=', record.start_id)], limit=1)
+            if not start_record:
+                raise ValidationError(_("El ID de inicio (%s) no existe en el modelo %s.") % (record.start_id, model_name))
+            
+            # Check existence of end_id
+            end_record = self.env[model_name].search([('id', '=', record.end_id)], limit=1)
+            if not end_record:
+                raise ValidationError(_("El ID del final (%s) no existe en el modelo %s.") % (record.end_id, model_name))
+
     @api.model
     def create(self, vals):
         record = super().create(vals)
-        # Process in background
-        dump_executor.submit(record._process_dump_job, self.env.cr.dbname, record.id)
+        # Process in background after the transaction has successfully committed
+        self.env.cr.after_commit(
+            lambda: dump_executor.submit(record._process_dump_job, self.env.cr.dbname, record.id)
+        )
         return record
 
     def _process_dump_job(self, dbname, dump_id):
