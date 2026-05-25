@@ -51,7 +51,7 @@ class Dump(models.Model):
     def create(self, vals):
         record = super().create(vals)
         # Process in background after the transaction has successfully committed
-        self.env.cr.after_commit(
+        self.env.cr.postcommit.add(
             lambda: dump_executor.submit(record._process_dump_job, self.env.cr.dbname, record.id)
         )
         return record
