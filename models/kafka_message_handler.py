@@ -202,7 +202,7 @@ class KafkaMessageHandler(models.Model):
         for record in records:
             # Derive model name from topic (format is model_name-_-api_like or model_name-_-schema_like)
             model_name = record.topic.split('-_-')[0] if record.topic else False
-            model_info = self.env["followed.model"].search([("model.model", "=", model_name)], limit=1)
+            model_info = self.env["followed.model"].sudo().search([("model.model", "=", model_name)], limit=1)
             
             # Ensure topic exists before sending
             self._ensure_topic_exists(record.topic, model_info=model_info)
@@ -236,7 +236,7 @@ class KafkaMessageHandler(models.Model):
             for record in records_not_sent:
                 # Derive model name from topic
                 model_name = record.topic.split('-_-')[0] if record.topic else False
-                model_info = self.env["followed.model"].search([("model.model", "=", model_name)], limit=1)
+                model_info = self.env["followed.model"].sudo().search([("model.model", "=", model_name)], limit=1)
                 
                 self._ensure_topic_exists(record.topic, model_info=model_info)
                 kafka = self._get_producer(model_info=model_info)

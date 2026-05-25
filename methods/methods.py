@@ -191,7 +191,7 @@ class KafkaAsyncMixin(models.AbstractModel):
 
 
     def write(self, vals):
-        is_followed = self.env["followed.model"].search([("model", "=", self._name)], limit=1)
+        is_followed = self.env["followed.model"].sudo().search([("model.model", "=", self._name)], limit=1)
         res = super().write(vals) 
         
         if is_followed and res:
@@ -218,7 +218,7 @@ class KafkaAsyncMixin(models.AbstractModel):
     @api.model
     def create(self, vals):
         record = super().create(vals)
-        is_followed = self.env["followed.model"].search([("model", "=", self._name)], limit=1)
+        is_followed = self.env["followed.model"].sudo().search([("model.model", "=", self._name)], limit=1)
         if is_followed: 
             if is_followed.api_like:
                 try:
@@ -238,7 +238,7 @@ class KafkaAsyncMixin(models.AbstractModel):
     # Overridden unlink
     # ------------------------------
     def unlink(self):
-        is_followed = self.env["followed.model"].search([("model", "=", self._name)], limit=1)
+        is_followed = self.env["followed.model"].sudo().search([("model.model", "=", self._name)], limit=1)
         if is_followed:
             records_to_notify = list(self)  # copy before deletion
             result = super().unlink()

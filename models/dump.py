@@ -59,7 +59,7 @@ class Dump(models.Model):
                          total_count, model_name, self.start_id, self.end_id)
             
             # Check topic existence for enabled modes (once per dump for efficiency)
-            model_info = self.env["followed.model"].search([("model", "=", self.model.id)], limit=1)
+            model_info = self.env["followed.model"].sudo().search([("model", "=", self.model.id)], limit=1)
             
             if self.api_like:
                 if not self.env['kafka.message.handler']._ensure_topic_exists(f"{model_name}-_-api_like", model_info=model_info):
