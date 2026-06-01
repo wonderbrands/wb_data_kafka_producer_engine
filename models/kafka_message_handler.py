@@ -220,6 +220,17 @@ class KafkaMessageHandler(models.Model):
                     kafka['producer'].flush()
                     record.sent_status = 'sent'
                     record.sent_date = datetime.now()
+
+                    # Overwrite message to only contain the odoo_internal_id on success
+                    try:
+                        if record.message:
+                            msg_data = json.loads(record.message)
+                            if isinstance(msg_data, str):
+                                msg_data = json.loads(msg_data)
+                            if isinstance(msg_data, dict) and 'odoo_internal_id' in msg_data:
+                                record.message = str(msg_data['odoo_internal_id'])
+                    except Exception as json_err:
+                        _logger.warning("Could not parse message or find odoo_internal_id on creation success: %s", json_err)
                 except Exception as e:
                     record.sent_status = 'failed'
                     record.error_message = str(e)
@@ -250,9 +261,28 @@ class KafkaMessageHandler(models.Model):
                         kafka['producer'].flush()
                         record.sent_status = 'sent'
                         record.sent_date = datetime.now()
+
+                        # Add log of successful retry to error_message
+                        current_error = record.error_message or ''
+                        log_msg = f"Reenviado con éxito el {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        record.error_message = f"{current_error}\n{log_msg}" if current_error else log_msg
+
+                        # Overwrite message to only contain the odoo_internal_id on success
+                        try:
+                            if record.message:
+                                msg_data = json.loads(record.message)
+                                if isinstance(msg_data, str):
+                                    msg_data = json.loads(msg_data)
+                                if isinstance(msg_data, dict) and 'odoo_internal_id' in msg_data:
+                                    record.message = str(msg_data['odoo_internal_id'])
+                        except Exception as json_err:
+                            _logger.warning("Could not parse message or find odoo_internal_id on retry success: %s", json_err)
                     except Exception as e:
                         record.sent_status = 'failed'
-                        record.error_message = str(e)
+                        # Add log of failed retry attempt to error_message
+                        current_error = record.error_message or ''
+                        log_msg = f"Intento de reenvío fallido el {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}: {e}"
+                        record.error_message = f"{current_error}\n{log_msg}" if current_error else log_msg
         else:
             raise UserError("No records to retry")
 
