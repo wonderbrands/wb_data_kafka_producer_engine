@@ -196,7 +196,6 @@ class KafkaAsyncMixin(models.AbstractModel):
         
         if is_followed and res:
             self.env.cr.flush()
-            self.env.cr.commit()
             
             if is_followed.api_like:
                 try:
