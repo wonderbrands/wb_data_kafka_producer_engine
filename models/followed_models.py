@@ -32,16 +32,31 @@ class FollowedModel(models.Model):
         return res
 
     def _create_kafka_topics(self):
-        for record in self:
-            if not record.model:
-                continue
-            
-            handler = self.env['kafka.message.handler']
-            if record.api_like:
-                topic_name = f"{record.model.model}-_-api_like"
-                handler._ensure_topic_exists(topic_name, model_info=record)
-            
-            if record.schema_like:
-                topic_name = f"{record.model.model}-_-schema_like"
-                handler._ensure_topic_exists(topic_name, model_info=record)
+        import threading
+        import odoo
+        if not self:
+            return
+        dbname = self.env.cr.dbname
+        registry = self.env.registry
+        ids = self.ids
+        
+        def run_in_background():
+            with registry.cursor() as cr:
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                records = env['followed.model'].browse(ids)
+                for record in records:
+                    if not record.model:
+                        continue
+                    
+                    handler = env['kafka.message.handler']
+                    if record.api_like:
+                        topic_name = f"{record.model.model}-_-api_like"
+                        handler._ensure_topic_exists(topic_name, model_info=record)
+                    
+                    if record.schema_like:
+                        topic_name = f"{record.model.model}-_-schema_like"
+                        handler._ensure_topic_exists(topic_name, model_info=record)
+                cr.commit()
+
+        threading.Thread(target=run_in_background, daemon=True).start()
 

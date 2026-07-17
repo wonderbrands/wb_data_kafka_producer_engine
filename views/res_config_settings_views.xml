@@ -12,13 +12,16 @@
                         <setting string="Kafka Broker Servers" help="Bootstrap servers for the Kafka cluster.">
                             <field name="kafka_producer_broker_servers" placeholder="e.g. b-1.msk...:9098,b-2.msk...:9098"/>
                         </setting>
-                        <setting string="AWS Region" help="The region where your MSK cluster resides.">
+                        <setting string="Use AWS IAM Authentication" help="Whether to use AWS IAM authentication for MSK.">
+                            <field name="kafka_producer_use_sasl_iam"/>
+                        </setting>
+                        <setting string="AWS Region" help="The region where your MSK cluster resides." invisible="not kafka_producer_use_sasl_iam">
                             <field name="kafka_producer_aws_region"/>
                         </setting>
-                        <setting string="AWS Access Key" help="Access Key ID for IAM authentication.">
+                        <setting string="AWS Access Key" help="Access Key ID for IAM authentication." invisible="not kafka_producer_use_sasl_iam">
                             <field name="kafka_producer_aws_access_key_id"/>
                         </setting>
-                        <setting string="AWS Secret Key" help="Secret Access Key for IAM authentication.">
+                        <setting string="AWS Secret Key" help="Secret Access Key for IAM authentication." invisible="not kafka_producer_use_sasl_iam">
                             <field name="kafka_producer_aws_secret_access_key" password="True"/>
                         </setting>
                     </block>

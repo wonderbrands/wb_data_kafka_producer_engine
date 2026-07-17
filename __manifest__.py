@@ -27,7 +27,6 @@
             'click',
             'confluent-kafka',
             'jmespath',
-            'kafka-python',
             'packaging',
             'python-dateutil',
             's3transfer',

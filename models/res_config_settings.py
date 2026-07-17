@@ -9,6 +9,12 @@ class ResConfigSettings(models.TransientModel):
         config_parameter='kafka_producer.broker_servers',
         help="Comma-separated list of Kafka broker servers (e.g., broker1:9098,broker2:9098)"
     )
+    kafka_producer_use_sasl_iam = fields.Boolean(
+        string="Use AWS IAM Authentication",
+        config_parameter='kafka_producer.use_sasl_iam',
+        default=True,
+        help="If enabled, uses SASL_SSL OAUTHBEARER with AWS MSK IAM token provider."
+    )
     kafka_producer_aws_access_key_id = fields.Char(
         string="AWS Access Key ID",
         config_parameter='kafka_producer.aws_access_key_id',

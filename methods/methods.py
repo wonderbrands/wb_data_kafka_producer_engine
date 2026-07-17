@@ -167,27 +167,37 @@ class KafkaAsyncMixin(models.AbstractModel):
 
         executor.submit(self._background_job, messages, records[0]._name if records else "unknown", operation_type, data_like)
 
-    def query_id(self, rec_id, model_name, fields=None):
+    def query_ids(self, rec_ids, model_name, fields=None):
+        if not rec_ids:
+            return []
         model = self.env[model_name]
         table = model._table
         cr = self.env.cr
         
-        if not fields:
-            cr.execute(f"SELECT * FROM {table} WHERE id = %s", (rec_id,))
+        ids_tuple = tuple(rec_ids)
+        if len(ids_tuple) == 1:
+            query_placeholder = "= %s"
+            query_val = ids_tuple[0]
         else:
-            cr.execute(f"SELECT {', '.join(fields)} FROM {table} WHERE id = %s", (rec_id,))
-        row = cr.fetchone()
-        
-        if row is None:
-            return None
-        
-        # Get column names from cursor description
-        colnames = [desc[0] for desc in cr.description]
-        result = dict(zip(colnames, row))
-        #_logger.info("========================================")
-        #_logger.info("getting query: %s", result)        
-        return result
+            query_placeholder = "IN %s"
+            query_val = ids_tuple
 
+        if not fields:
+            cr.execute(f"SELECT * FROM {table} WHERE id {query_placeholder}", (query_val,))
+        else:
+            cols = [f'"{f}"' for f in fields]
+            cr.execute(f"SELECT {', '.join(cols)} FROM {table} WHERE id {query_placeholder}", (query_val,))
+            
+        rows = cr.fetchall()
+        if not rows:
+            return []
+            
+        colnames = [desc[0] for desc in cr.description]
+        return [dict(zip(colnames, row)) for row in rows]
+
+    def query_id(self, rec_id, model_name, fields=None):
+        res = self.query_ids([rec_id], model_name, fields)
+        return res[0] if res else None
 
 
     def write(self, vals):
@@ -206,8 +216,13 @@ class KafkaAsyncMixin(models.AbstractModel):
 
             if is_followed.schema_like:
                 try:
-                    # Now the SQL query will see the updated data
-                    self._create_kafka_message_async(self, vals_list=[self.query_id(record.id, record._name) for record in self], operation_type="update", data_like="schema_like")
+                    # Batch fetch all database rows in one SQL query instead of N queries in a loop!
+                    ids = self.ids
+                    rows = self.query_ids(ids, self._name)
+                    rows_by_id = {row['id']: row for row in rows}
+                    vals_list = [rows_by_id[record.id] for record in self if record.id in rows_by_id]
+                    if vals_list:
+                        self._create_kafka_message_async(self, vals_list=vals_list, operation_type="update", data_like="schema_like")
                 except Exception:
                     _logger.error("Error preparing Kafka messages for write", exc_info=True)
         
@@ -227,7 +242,9 @@ class KafkaAsyncMixin(models.AbstractModel):
 
             if is_followed.schema_like:
                 try:
-                    self._create_kafka_message_async(record, vals_list=[self.query_id(record.id, record._name)], operation_type="create", data_like="schema_like")
+                    rows = self.query_ids([record.id], record._name)
+                    if rows:
+                        self._create_kafka_message_async(record, vals_list=[rows[0]], operation_type="create", data_like="schema_like")
                 except Exception:
                     _logger.error("Error preparing Kafka messages for create", exc_info=True)
         return record

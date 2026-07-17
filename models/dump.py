@@ -104,18 +104,28 @@ class Dump(models.Model):
                 batch_ids = to_dump_ids[i:i + batch_size]
                 batch_records = self.env[model_name].browse(batch_ids)
                 
+                handlers_to_create = []
+
+                if self.api_like:
+                    records_data = batch_records.read()
+                    records_dict = {r['id']: r for r in records_data}
+
+                if self.schema_like:
+                    db_rows = self.query_ids(batch_ids, model_name)
+                    db_rows_dict = {row['id']: row for row in db_rows}
+
                 for rec in batch_records:
                     try:
                         # Process based on flags
-                        if self.api_like:
-                            data = self._prepare_vals(rec, rec.read()[0])
+                        if self.api_like and rec.id in records_dict:
+                            data = self._prepare_vals(rec, records_dict[rec.id])
                             data.update({
                                 "odoo_internal_id": rec.id,
                                 "operation": "dump",
                                 "by": self.env.user.name or "Odoo System",
                                 "timestamp": datetime.datetime.utcnow().isoformat(),
                             })
-                            self.env['kafka.message.handler'].create({
+                            handlers_to_create.append({
                                 'message': json.dumps(data, default=self._convert),
                                 'topic': f"{model_name}-_-api_like",
                                 'operation_type': 'dump',
@@ -123,15 +133,15 @@ class Dump(models.Model):
                                 'data_like': 'api_like'
                             })
 
-                        if self.schema_like:
-                            data = self.query_id(rec.id, rec._name)
+                        if self.schema_like and rec.id in db_rows_dict:
+                            data = db_rows_dict[rec.id]
                             data.update({
                                 "odoo_internal_id": rec.id,
                                 "operation": "dump",
                                 "by": self.env.user.name or "Odoo System",
                                 "timestamp": datetime.datetime.utcnow().isoformat(),
                             })
-                            self.env['kafka.message.handler'].create({
+                            handlers_to_create.append({
                                 'message': json.dumps(data, default=self._convert),
                                 'topic': f"{model_name}-_-schema_like",
                                 'operation_type': 'dump',
@@ -146,6 +156,9 @@ class Dump(models.Model):
                                     rec._name, rec.id, e, exc_info=True)
                         continue
                 
+                if handlers_to_create:
+                    self.env['kafka.message.handler'].create(handlers_to_create)
+
                 # Update progress and commit after each batch
                 self.write({'progress': progress})
                 self.env.cr.commit()

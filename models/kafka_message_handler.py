@@ -4,23 +4,14 @@ import os
 import logging
 import time
 from datetime import datetime
-from kafka import KafkaProducer, KafkaAdminClient, KafkaConsumer, TopicPartition
-from kafka.admin import NewTopic
-from kafka.errors import TopicAlreadyExistsError
-from kafka.sasl.oauth import AbstractTokenProvider
+from confluent_kafka import Producer, Consumer, TopicPartition
+from confluent_kafka.admin import AdminClient, NewTopic, ConsumerGroupTopicPartitions
+from confluent_kafka.exceptions import KafkaException
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
-
-class MSKTokenProvider(AbstractTokenProvider):
-    def __init__(self, region):
-        self.region = region
-
-    def token(self):
-        token, _ = MSKAuthTokenProvider.generate_auth_token(self.region)
-        return token
 
 
 class KafkaMessageHandler(models.Model):
@@ -77,13 +68,8 @@ class KafkaMessageHandler(models.Model):
         brokers = config['brokers']
         region = config['region']
 
-        if not brokers or not config['aws_access_key'] or not config['aws_secret_key'] or not region:
-            missing = []
-            if not brokers: missing.append("BROKER_SERVERS")
-            if not config['aws_access_key']: missing.append("AWS_ACCESS_KEY_ID")
-            if not config['aws_secret_key']: missing.append("AWS_SECRET_ACCESS_KEY")
-            if not region: missing.append("AWS_REGION")
-            msg = f"Missing configuration: {', '.join(missing)}"
+        if not brokers:
+            msg = "Missing configuration: BROKER_SERVERS"
             _logger.error(msg)
             return {'producer': None, 'error': True, 'message': msg}
 
@@ -97,24 +83,32 @@ class KafkaMessageHandler(models.Model):
         if not brokers:
             return {'producer': None, 'error': True, 'message': "No bootstrap servers found"}
 
-        tp = MSKTokenProvider(region)
+        Config = self.env['ir.config_parameter'].sudo()
+        use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
+
+        conf = {
+            'bootstrap.servers': ','.join(brokers),
+            'client.id': f"{socket.gethostname()}-producer",
+            'acks': '1',
+            'retries': 3,
+            'request.timeout.ms': 25000,
+            'linger.ms': 5,
+        }
+
+        if use_sasl_iam:
+            if not config['aws_access_key'] or not config['aws_secret_key'] or not region:
+                msg = "Missing AWS credentials for MSK IAM authentication."
+                _logger.error(msg)
+                return {'producer': None, 'error': True, 'message': msg}
+            
+            conf.update({
+                'security.protocol': 'SASL_SSL',
+                'sasl.mechanism': 'OAUTHBEARER',
+                'oauth_cb': lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0),
+            })
 
         try:
-            producer = KafkaProducer(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-producer",
-                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                key_serializer=lambda k: k.encode('utf-8') if k else None,
-                acks=1,
-                retries=3,
-                max_block_ms=30000,
-                request_timeout_ms=25000,
-                batch_size=1024,
-                linger_ms=5,
-            )
+            producer = Producer(conf)
             KafkaMessageHandler._cached_producer = producer
             return {'producer': producer, 'error': False}
         except Exception as e:
@@ -144,28 +138,34 @@ class KafkaMessageHandler(models.Model):
             _logger.error("No brokers configured for Kafka. Cannot ensure topic %s exists.", topic_name)
             return False
 
-        if not region:
-            _logger.error("AWS_REGION not configured. Cannot ensure topic %s exists.", topic_name)
-            return False
+        Config = self.env['ir.config_parameter'].sudo()
+        use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
 
-        _logger.info("Ensuring topic %s exists using brokers: %s", topic_name, brokers)
-        tp = MSKTokenProvider(region)
+        _logger.debug("Ensuring topic %s exists using brokers: %s", topic_name, brokers)
+
+        conf = {
+            'bootstrap.servers': ','.join(brokers),
+            'client.id': f"{socket.gethostname()}-admin-check",
+            'request.timeout.ms': 10000
+        }
+
+        if use_sasl_iam:
+            if not region:
+                _logger.error("AWS_REGION not configured. Cannot ensure topic %s exists.", topic_name)
+                return False
+            conf.update({
+                'security.protocol': 'SASL_SSL',
+                'sasl.mechanism': 'OAUTHBEARER',
+                'oauth_cb': lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0),
+            })
 
         try:
-            admin_client = KafkaAdminClient(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-admin-check",
-                request_timeout_ms=10000
-            )
-
-            existing_topics = admin_client.list_topics()
+            admin_client = AdminClient(conf)
+            topics_metadata = admin_client.list_topics(timeout=10.0)
+            existing_topics = topics_metadata.topics
             if topic_name in existing_topics:
-                _logger.info("Topic %s already exists in Kafka", topic_name)
+                _logger.debug("Topic %s already exists in Kafka", topic_name)
                 KafkaMessageHandler._known_topics.add(topic_name)
-                admin_client.close()
                 return True
 
             # Create topic
@@ -174,24 +174,26 @@ class KafkaMessageHandler(models.Model):
             replication_factor = min(3, broker_count)
             
             try:
-                topic = NewTopic(name=topic_name, num_partitions=1, replication_factor=replication_factor)
-                admin_client.create_topics([topic], timeout_ms=10000)
+                topic = NewTopic(topic_name, num_partitions=1, replication_factor=replication_factor)
+                futures = admin_client.create_topics([topic], operation_timeout=10.0)
+                for topic, future in futures.items():
+                    future.result()
                 KafkaMessageHandler._known_topics.add(topic_name)
                 _logger.info("Successfully created Kafka topic: %s with rf=%s", topic_name, replication_factor)
             except Exception as e:
                 _logger.warning("Failed to create topic %s with rf=%s: %s. Retrying with rf=1", 
                                topic_name, replication_factor, e)
                 try:
-                    topic = NewTopic(name=topic_name, num_partitions=1, replication_factor=1)
-                    admin_client.create_topics([topic], timeout_ms=10000)
+                    topic = NewTopic(topic_name, num_partitions=1, replication_factor=1)
+                    futures = admin_client.create_topics([topic], operation_timeout=10.0)
+                    for topic, future in futures.items():
+                        future.result()
                     KafkaMessageHandler._known_topics.add(topic_name)
                     _logger.info("Successfully created Kafka topic %s with rf=1", topic_name)
                 except Exception as e2:
                     _logger.error("Failed to create topic %s even with rf=1: %s", topic_name, e2)
-                    admin_client.close()
                     return False
             
-            admin_client.close()
             return True
         except Exception as e:
             _logger.error("Error in _ensure_topic_exists for %s: %s", topic_name, e)
@@ -212,10 +214,10 @@ class KafkaMessageHandler(models.Model):
 
             if kafka and kafka['producer']:
                 try:
-                    kafka['producer'].send(
+                    kafka['producer'].produce(
                         topic=record.topic,
-                        value=record.message,
-                        key=record.operation_type
+                        value=record.message.encode('utf-8') if record.message else b'',
+                        key=record.operation_type.encode('utf-8') if record.operation_type else None
                     )
                     kafka['producer'].flush()
                     record.sent_status = 'sent'
@@ -253,10 +255,10 @@ class KafkaMessageHandler(models.Model):
                 kafka = self._get_producer(model_info=model_info)
                 if kafka and kafka['producer']:
                     try:
-                        kafka['producer'].send(
+                        kafka['producer'].produce(
                             topic=record.topic,
-                            value=record.message,
-                            key=record.operation_type
+                            value=record.message.encode('utf-8') if record.message else b'',
+                            key=record.operation_type.encode('utf-8') if record.operation_type else None
                         )
                         kafka['producer'].flush()
                         record.sent_status = 'sent'
@@ -298,38 +300,52 @@ class KafkaMessageHandler(models.Model):
             config = self._get_kafka_config()
             brokers = config['brokers']
             region = config['region']
-            tp = MSKTokenProvider(region)
+            Config = self.env['ir.config_parameter'].sudo()
+            use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
 
-            admin_client = KafkaAdminClient(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-admin-query"
-            )
-            topic_names = admin_client.list_topics()
-            admin_client.close()
+            tp_lambda = lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0)
+
+            conf = {
+                'bootstrap.servers': ','.join(brokers),
+                'client.id': f"{socket.gethostname()}-admin-query",
+                'request.timeout.ms': 10000
+            }
+            if use_sasl_iam:
+                conf.update({
+                    'security.protocol': 'SASL_SSL',
+                    'sasl.mechanism': 'OAUTHBEARER',
+                    'oauth_cb': tp_lambda,
+                })
+
+            admin_client = AdminClient(conf)
+            topics_metadata = admin_client.list_topics(timeout=10.0)
+            topic_names = list(topics_metadata.topics.keys())
 
             # Now get counts for each topic using a consumer
-            consumer = KafkaConsumer(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-count-query"
-            )
+            consumer_conf = {
+                'bootstrap.servers': ','.join(brokers),
+                'client.id': f"{socket.gethostname()}-count-query",
+                'group.id': f"{socket.gethostname()}-count-group",
+            }
+            if use_sasl_iam:
+                consumer_conf.update({
+                    'security.protocol': 'SASL_SSL',
+                    'sasl.mechanism': 'OAUTHBEARER',
+                    'oauth_cb': tp_lambda,
+                })
+
+            consumer = Consumer(consumer_conf)
 
             result = []
             for name in sorted(topic_names):
                 total_messages = 0
                 try:
-                    partitions = consumer.partitions_for_topic(name)
-                    if partitions:
-                        tps = [TopicPartition(name, p) for p in partitions]
-                        beg_offsets = consumer.beginning_offsets(tps)
-                        end_offsets = consumer.end_offsets(tps)
-                        for tp_obj in tps:
-                            total_messages += end_offsets[tp_obj] - beg_offsets[tp_obj]
+                    topic_meta = topics_metadata.topics.get(name)
+                    if topic_meta:
+                        for p_id in topic_meta.partitions.keys():
+                            tp = TopicPartition(name, p_id)
+                            low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                            total_messages += (high - low)
                 except Exception as e:
                     _logger.warning("Could not get count for topic %s: %s", name, e)
 
@@ -355,44 +371,64 @@ class KafkaMessageHandler(models.Model):
             config = self._get_kafka_config()
             brokers = config['brokers']
             region = config['region']
-            tp = MSKTokenProvider(region)
+            Config = self.env['ir.config_parameter'].sudo()
+            use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
 
-            consumer = KafkaConsumer(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-consumer",
-                auto_offset_reset='earliest',
-                enable_auto_commit=False,
-                value_deserializer=lambda v: v.decode('utf-8') if v else None
-            )
+            tp_lambda = lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0)
 
-            partitions = consumer.partitions_for_topic(topic_name)
-            if not partitions:
+            consumer_conf = {
+                'bootstrap.servers': ','.join(brokers),
+                'client.id': f"{socket.gethostname()}-consumer",
+                'group.id': f"{socket.gethostname()}-consumer-group",
+                'auto.offset.reset': 'earliest',
+                'enable.auto.commit': False
+            }
+            if use_sasl_iam:
+                consumer_conf.update({
+                    'security.protocol': 'SASL_SSL',
+                    'sasl.mechanism': 'OAUTHBEARER',
+                    'oauth_cb': tp_lambda,
+                })
+
+            consumer = Consumer(consumer_conf)
+
+            topics_metadata = consumer.list_topics(topic_name, timeout=5.0)
+            topic_meta = topics_metadata.topics.get(topic_name)
+            if not topic_meta:
                 consumer.close()
                 return []
 
             messages = []
-            for p in partitions:
-                tp_obj = TopicPartition(topic_name, p)
-                consumer.assign([tp_obj])
-                
-                end_offsets = consumer.end_offsets([tp_obj])
-                end_offset = end_offsets[tp_obj]
-                
-                start_offset = max(0, end_offset - count)
-                consumer.seek(tp_obj, start_offset)
-                
-                batch = consumer.poll(timeout_ms=5000)
-                if tp_obj in batch:
-                    for msg in batch[tp_obj]:
+            for p_id in topic_meta.partitions.keys():
+                tp = TopicPartition(topic_name, p_id)
+                try:
+                    low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                    start_offset = max(low, high - count)
+                    
+                    tp.offset = start_offset
+                    consumer.assign([tp])
+                    
+                    num_to_read = high - start_offset
+                    read_count = 0
+                    while read_count < num_to_read:
+                        msg = consumer.poll(timeout=1.0)
+                        if msg is None:
+                            break
+                        if msg.error():
+                            break
+                        
+                        ts_type, ts_val = msg.timestamp()
+                        ts_dt = datetime.fromtimestamp(ts_val / 1000.0) if ts_val else datetime.now()
+                        
                         messages.append({
-                            'offset': msg.offset,
-                            'timestamp': datetime.fromtimestamp(msg.timestamp/1000.0).isoformat(),
-                            'key': msg.key.decode('utf-8') if msg.key else None,
-                            'value': msg.value
+                            'offset': msg.offset(),
+                            'timestamp': ts_dt.isoformat(),
+                            'key': msg.key().decode('utf-8') if msg.key() else None,
+                            'value': msg.value().decode('utf-8') if msg.value() else None
                         })
+                        read_count += 1
+                except Exception as p_err:
+                    _logger.warning("Error reading partition %s: %s", p_id, p_err)
 
             consumer.close()
             messages.sort(key=lambda x: x['offset'], reverse=True)
@@ -411,16 +447,27 @@ class KafkaMessageHandler(models.Model):
         try:
             config = self._get_kafka_config()
             brokers = config['brokers']
-            admin_client = KafkaAdminClient(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=MSKTokenProvider(config['region']),
-                client_id=f"{socket.gethostname()}-admin-delete"
-            )
-            admin_client.delete_topics([topic_name])
-            admin_client.close()
-            KafkaMessageHandler._cached_kafka = None
+            region = config['region']
+            Config = self.env['ir.config_parameter'].sudo()
+            use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
+
+            conf = {
+                'bootstrap.servers': ','.join(brokers),
+                'client.id': f"{socket.gethostname()}-admin-delete",
+                'request.timeout.ms': 10000
+            }
+            if use_sasl_iam:
+                conf.update({
+                    'security.protocol': 'SASL_SSL',
+                    'sasl.mechanism': 'OAUTHBEARER',
+                    'oauth_cb': lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0),
+                })
+
+            admin_client = AdminClient(conf)
+            futures = admin_client.delete_topics([topic_name], operation_timeout=10.0)
+            for topic, future in futures.items():
+                future.result()
+            KafkaMessageHandler._cached_producer = None
             return True
         except Exception as e:
             return {'error': str(e)}
@@ -436,19 +483,25 @@ class KafkaMessageHandler(models.Model):
             config = self._get_kafka_config()
             brokers = config['brokers']
             region = config['region']
-            tp = MSKTokenProvider(region)
+            Config = self.env['ir.config_parameter'].sudo()
+            use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
 
-            admin_client = KafkaAdminClient(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-admin-groups"
-            )
-            groups = admin_client.list_consumer_groups()
-            admin_client.close()
-            
-            return sorted([g[0] for g in groups])
+            conf = {
+                'bootstrap.servers': ','.join(brokers),
+                'client.id': f"{socket.gethostname()}-admin-groups",
+                'request.timeout.ms': 10000
+            }
+            if use_sasl_iam:
+                conf.update({
+                    'security.protocol': 'SASL_SSL',
+                    'sasl.mechanism': 'OAUTHBEARER',
+                    'oauth_cb': lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0),
+                })
+
+            admin_client = AdminClient(conf)
+            future = admin_client.list_consumer_groups()
+            groups_result = future.result()
+            return sorted([g.group_id for g in groups_result.valid])
         except Exception as e:
             _logger.error("Failed to get consumer groups: %s", e, exc_info=True)
             return {'error': str(e)}
@@ -464,46 +517,68 @@ class KafkaMessageHandler(models.Model):
             config = self._get_kafka_config()
             brokers = config['brokers']
             region = config['region']
-            tp = MSKTokenProvider(region)
+            Config = self.env['ir.config_parameter'].sudo()
+            use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
 
-            admin_client = KafkaAdminClient(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-admin-group-details"
-            )
+            tp_lambda = lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0)
 
-            offsets = admin_client.list_consumer_group_offsets(group_id)
-            
-            # Use a consumer to get end offsets
-            consumer = KafkaConsumer(
-                bootstrap_servers=brokers,
-                security_protocol='SASL_SSL',
-                sasl_mechanism='OAUTHBEARER',
-                sasl_oauth_token_provider=tp,
-                client_id=f"{socket.gethostname()}-lag-query"
-            )
-
-            details = []
-            for tp_obj, offset_and_metadata in offsets.items():
-                current_offset = offset_and_metadata.offset
-                
-                # Get end offset for this partition
-                end_offsets = consumer.end_offsets([tp_obj])
-                log_end_offset = end_offsets.get(tp_obj, 0)
-                
-                lag = max(0, log_end_offset - current_offset) if current_offset is not None else log_end_offset
-
-                details.append({
-                    'topic': tp_obj.topic,
-                    'partition': tp_obj.partition,
-                    'current_offset': current_offset,
-                    'log_end_offset': log_end_offset,
-                    'lag': lag
+            conf = {
+                'bootstrap.servers': ','.join(brokers),
+                'client.id': f"{socket.gethostname()}-admin-group-details",
+                'request.timeout.ms': 10000
+            }
+            if use_sasl_iam:
+                conf.update({
+                    'security.protocol': 'SASL_SSL',
+                    'sasl.mechanism': 'OAUTHBEARER',
+                    'oauth_cb': tp_lambda,
                 })
 
-            admin_client.close()
+            admin_client = AdminClient(conf)
+            
+            # Get committed offsets for group
+            from confluent_kafka.admin import ConsumerGroupTopicPartitions
+            future = admin_client.list_consumer_group_offsets([ConsumerGroupTopicPartitions(group_id)])
+            res = future.result()
+            group_partition_offsets = res.get(group_id)
+
+            # Use a consumer to get end offsets
+            consumer_conf = {
+                'bootstrap.servers': ','.join(brokers),
+                'client.id': f"{socket.gethostname()}-lag-query",
+                'group.id': f"{socket.gethostname()}-lag-group",
+            }
+            if use_sasl_iam:
+                consumer_conf.update({
+                    'security.protocol': 'SASL_SSL',
+                    'sasl.mechanism': 'OAUTHBEARER',
+                    'oauth_cb': tp_lambda,
+                })
+
+            consumer = Consumer(consumer_conf)
+
+            details = []
+            if group_partition_offsets:
+                for tp in group_partition_offsets.topic_partitions:
+                    current_offset = tp.offset
+                    
+                    try:
+                        low, high = consumer.get_watermark_offsets(TopicPartition(tp.topic, tp.partition), timeout=5.0)
+                        log_end_offset = high
+                    except Exception:
+                        log_end_offset = 0
+                    
+                    offset_val = current_offset if current_offset >= 0 else 0
+                    lag = max(0, log_end_offset - offset_val)
+
+                    details.append({
+                        'topic': tp.topic,
+                        'partition': tp.partition,
+                        'current_offset': current_offset if current_offset >= 0 else None,
+                        'log_end_offset': log_end_offset,
+                        'lag': lag
+                    })
+
             consumer.close()
             
             # Sort by topic and partition
