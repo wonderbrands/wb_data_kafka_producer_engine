@@ -5,6 +5,7 @@ boto3
 botocore
 click
 confluent-kafka
+jmespath
 packaging
 python-dateutil
 s3transfer

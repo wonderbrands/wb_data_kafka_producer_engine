@@ -10,7 +10,7 @@ try:
     from confluent_kafka.admin import ConsumerGroupTopicPartitions
 except ImportError:
     from confluent_kafka.admin import _ConsumerGroupTopicPartitions as ConsumerGroupTopicPartitions
-from confluent_kafka.exceptions import KafkaException
+from confluent_kafka import KafkaException
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from odoo import api, fields, models
 from odoo.exceptions import UserError
