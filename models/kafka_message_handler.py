@@ -5,7 +5,11 @@ import logging
 import time
 from datetime import datetime
 from confluent_kafka import Producer, Consumer, TopicPartition
-from confluent_kafka.admin import AdminClient, NewTopic, ConsumerGroupTopicPartitions
+from confluent_kafka.admin import AdminClient, NewTopic
+try:
+    from confluent_kafka.admin import ConsumerGroupTopicPartitions
+except ImportError:
+    from confluent_kafka.admin import _ConsumerGroupTopicPartitions as ConsumerGroupTopicPartitions
 from confluent_kafka.exceptions import KafkaException
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from odoo import api, fields, models
@@ -536,8 +540,6 @@ class KafkaMessageHandler(models.Model):
 
             admin_client = AdminClient(conf)
             
-            # Get committed offsets for group
-            from confluent_kafka.admin import ConsumerGroupTopicPartitions
             future = admin_client.list_consumer_group_offsets([ConsumerGroupTopicPartitions(group_id)])
             res = future.result()
             group_partition_offsets = res.get(group_id)
