@@ -1,6 +1,7 @@
 import json
 import socket
 import os
+import uuid
 import logging
 import time
 from datetime import datetime
@@ -205,6 +206,7 @@ class KafkaMessageHandler(models.Model):
 
     def create(self, vals_list):
         records = super().create(vals_list)
+        producers_to_flush = set()
         for record in records:
             # Derive model name from topic (format is model_name-_-api_like or model_name-_-schema_like)
             model_name = record.topic.split('-_-')[0] if record.topic else False
@@ -223,7 +225,7 @@ class KafkaMessageHandler(models.Model):
                         value=record.message.encode('utf-8') if record.message else b'',
                         key=record.operation_type.encode('utf-8') if record.operation_type else None
                     )
-                    kafka['producer'].flush()
+                    producers_to_flush.add(kafka['producer'])
                     record.sent_status = 'sent'
                     record.sent_date = datetime.now()
 
@@ -244,6 +246,12 @@ class KafkaMessageHandler(models.Model):
                 record.sent_status = 'not_configured'
                 if kafka:
                     record.error_message = kafka.get('message')
+
+        for producer in producers_to_flush:
+            try:
+                producer.flush()
+            except Exception as flush_err:
+                _logger.error("Error flushing Kafka producer: %s", flush_err)
 
         return records
 
@@ -309,9 +317,11 @@ class KafkaMessageHandler(models.Model):
 
             tp_lambda = lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0)
 
+            unique_suffix = uuid.uuid4().hex[:8]
+
             conf = {
                 'bootstrap.servers': ','.join(brokers),
-                'client.id': f"{socket.gethostname()}-admin-query",
+                'client.id': f"{socket.gethostname()}-admin-query-{unique_suffix}",
                 'request.timeout.ms': 10000
             }
             if use_sasl_iam:
@@ -328,8 +338,8 @@ class KafkaMessageHandler(models.Model):
             # Now get counts for each topic using a consumer
             consumer_conf = {
                 'bootstrap.servers': ','.join(brokers),
-                'client.id': f"{socket.gethostname()}-count-query",
-                'group.id': f"{socket.gethostname()}-count-group",
+                'client.id': f"{socket.gethostname()}-count-query-{unique_suffix}",
+                'group.id': f"{socket.gethostname()}-count-group-{unique_suffix}",
             }
             if use_sasl_iam:
                 consumer_conf.update({
@@ -339,27 +349,28 @@ class KafkaMessageHandler(models.Model):
                 })
 
             consumer = Consumer(consumer_conf)
+            try:
+                result = []
+                for name in sorted(topic_names):
+                    total_messages = 0
+                    try:
+                        topic_meta = topics_metadata.topics.get(name)
+                        if topic_meta:
+                            for p_id in topic_meta.partitions.keys():
+                                tp = TopicPartition(name, p_id)
+                                low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                                total_messages += (high - low)
+                    except Exception as e:
+                        _logger.warning("Could not get count for topic %s: %s", name, e)
 
-            result = []
-            for name in sorted(topic_names):
-                total_messages = 0
-                try:
-                    topic_meta = topics_metadata.topics.get(name)
-                    if topic_meta:
-                        for p_id in topic_meta.partitions.keys():
-                            tp = TopicPartition(name, p_id)
-                            low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
-                            total_messages += (high - low)
-                except Exception as e:
-                    _logger.warning("Could not get count for topic %s: %s", name, e)
+                    result.append({
+                        'name': name,
+                        'total_messages': total_messages
+                    })
 
-                result.append({
-                    'name': name,
-                    'total_messages': total_messages
-                })
-
-            consumer.close()
-            return result
+                return result
+            finally:
+                consumer.close()
         except Exception as e:
             _logger.error("Failed to get topics with counts: %s", e, exc_info=True)
             return {'error': str(e)}
@@ -380,10 +391,12 @@ class KafkaMessageHandler(models.Model):
 
             tp_lambda = lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0)
 
+            unique_suffix = uuid.uuid4().hex[:8]
+
             consumer_conf = {
                 'bootstrap.servers': ','.join(brokers),
-                'client.id': f"{socket.gethostname()}-consumer",
-                'group.id': f"{socket.gethostname()}-consumer-group",
+                'client.id': f"{socket.gethostname()}-consumer-{unique_suffix}",
+                'group.id': f"{socket.gethostname()}-consumer-group-{unique_suffix}",
                 'auto.offset.reset': 'earliest',
                 'enable.auto.commit': False
             }
@@ -395,48 +408,48 @@ class KafkaMessageHandler(models.Model):
                 })
 
             consumer = Consumer(consumer_conf)
+            try:
+                topics_metadata = consumer.list_topics(topic_name, timeout=5.0)
+                topic_meta = topics_metadata.topics.get(topic_name)
+                if not topic_meta:
+                    return []
 
-            topics_metadata = consumer.list_topics(topic_name, timeout=5.0)
-            topic_meta = topics_metadata.topics.get(topic_name)
-            if not topic_meta:
+                messages = []
+                for p_id in topic_meta.partitions.keys():
+                    tp = TopicPartition(topic_name, p_id)
+                    try:
+                        low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                        start_offset = max(low, high - count)
+                        
+                        tp.offset = start_offset
+                        consumer.assign([tp])
+                        
+                        num_to_read = high - start_offset
+                        read_count = 0
+                        while read_count < num_to_read:
+                            msg = consumer.poll(timeout=1.0)
+                            if msg is None:
+                                break
+                            if msg.error():
+                                break
+                            
+                            ts_type, ts_val = msg.timestamp()
+                            ts_dt = datetime.fromtimestamp(ts_val / 1000.0) if ts_val else datetime.now()
+                            
+                            messages.append({
+                                'offset': msg.offset(),
+                                'timestamp': ts_dt.isoformat(),
+                                'key': msg.key().decode('utf-8') if msg.key() else None,
+                                'value': msg.value().decode('utf-8') if msg.value() else None
+                            })
+                            read_count += 1
+                    except Exception as p_err:
+                        _logger.warning("Error reading partition %s: %s", p_id, p_err)
+
+                messages.sort(key=lambda x: x['offset'], reverse=True)
+                return messages[:count]
+            finally:
                 consumer.close()
-                return []
-
-            messages = []
-            for p_id in topic_meta.partitions.keys():
-                tp = TopicPartition(topic_name, p_id)
-                try:
-                    low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
-                    start_offset = max(low, high - count)
-                    
-                    tp.offset = start_offset
-                    consumer.assign([tp])
-                    
-                    num_to_read = high - start_offset
-                    read_count = 0
-                    while read_count < num_to_read:
-                        msg = consumer.poll(timeout=1.0)
-                        if msg is None:
-                            break
-                        if msg.error():
-                            break
-                        
-                        ts_type, ts_val = msg.timestamp()
-                        ts_dt = datetime.fromtimestamp(ts_val / 1000.0) if ts_val else datetime.now()
-                        
-                        messages.append({
-                            'offset': msg.offset(),
-                            'timestamp': ts_dt.isoformat(),
-                            'key': msg.key().decode('utf-8') if msg.key() else None,
-                            'value': msg.value().decode('utf-8') if msg.value() else None
-                        })
-                        read_count += 1
-                except Exception as p_err:
-                    _logger.warning("Error reading partition %s: %s", p_id, p_err)
-
-            consumer.close()
-            messages.sort(key=lambda x: x['offset'], reverse=True)
-            return messages[:count]
         except Exception as e:
             _logger.error("Failed to get messages: %s", e, exc_info=True)
             return {'error': str(e)}
@@ -490,9 +503,11 @@ class KafkaMessageHandler(models.Model):
             Config = self.env['ir.config_parameter'].sudo()
             use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
 
+            unique_suffix = uuid.uuid4().hex[:8]
+
             conf = {
                 'bootstrap.servers': ','.join(brokers),
-                'client.id': f"{socket.gethostname()}-admin-groups",
+                'client.id': f"{socket.gethostname()}-admin-groups-{unique_suffix}",
                 'request.timeout.ms': 10000
             }
             if use_sasl_iam:
@@ -526,9 +541,11 @@ class KafkaMessageHandler(models.Model):
 
             tp_lambda = lambda x: (MSKAuthTokenProvider.generate_auth_token(region)[0], MSKAuthTokenProvider.generate_auth_token(region)[1] / 1000.0)
 
+            unique_suffix = uuid.uuid4().hex[:8]
+
             conf = {
                 'bootstrap.servers': ','.join(brokers),
-                'client.id': f"{socket.gethostname()}-admin-group-details",
+                'client.id': f"{socket.gethostname()}-admin-group-details-{unique_suffix}",
                 'request.timeout.ms': 10000
             }
             if use_sasl_iam:
@@ -547,8 +564,8 @@ class KafkaMessageHandler(models.Model):
             # Use a consumer to get end offsets
             consumer_conf = {
                 'bootstrap.servers': ','.join(brokers),
-                'client.id': f"{socket.gethostname()}-lag-query",
-                'group.id': f"{socket.gethostname()}-lag-group",
+                'client.id': f"{socket.gethostname()}-lag-query-{unique_suffix}",
+                'group.id': f"{socket.gethostname()}-lag-group-{unique_suffix}",
             }
             if use_sasl_iam:
                 consumer_conf.update({
@@ -558,30 +575,30 @@ class KafkaMessageHandler(models.Model):
                 })
 
             consumer = Consumer(consumer_conf)
+            try:
+                details = []
+                if group_partition_offsets:
+                    for tp in group_partition_offsets.topic_partitions:
+                        current_offset = tp.offset
+                        
+                        try:
+                            low, high = consumer.get_watermark_offsets(TopicPartition(tp.topic, tp.partition), timeout=5.0)
+                            log_end_offset = high
+                        except Exception:
+                            log_end_offset = 0
+                        
+                        offset_val = current_offset if current_offset >= 0 else 0
+                        lag = max(0, log_end_offset - offset_val)
 
-            details = []
-            if group_partition_offsets:
-                for tp in group_partition_offsets.topic_partitions:
-                    current_offset = tp.offset
-                    
-                    try:
-                        low, high = consumer.get_watermark_offsets(TopicPartition(tp.topic, tp.partition), timeout=5.0)
-                        log_end_offset = high
-                    except Exception:
-                        log_end_offset = 0
-                    
-                    offset_val = current_offset if current_offset >= 0 else 0
-                    lag = max(0, log_end_offset - offset_val)
-
-                    details.append({
-                        'topic': tp.topic,
-                        'partition': tp.partition,
-                        'current_offset': current_offset if current_offset >= 0 else None,
-                        'log_end_offset': log_end_offset,
-                        'lag': lag
-                    })
-
-            consumer.close()
+                        details.append({
+                            'topic': tp.topic,
+                            'partition': tp.partition,
+                            'current_offset': current_offset if current_offset >= 0 else None,
+                            'log_end_offset': log_end_offset,
+                            'lag': lag
+                        })
+            finally:
+                consumer.close()
             
             # Sort by topic and partition
             details.sort(key=lambda x: (x['topic'], x['partition']))

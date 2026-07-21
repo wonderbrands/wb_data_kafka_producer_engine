@@ -162,6 +162,7 @@ class Dump(models.Model):
                 # Update progress and commit after each batch
                 self.write({'progress': progress})
                 self.env.cr.commit()
+                self.env.invalidate_all()
             
             _logger.info("Dump completed: %s/%s records", progress, total_count)
             

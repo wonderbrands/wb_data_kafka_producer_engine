@@ -58,23 +58,19 @@ class KafkaAsyncMixin(models.AbstractModel):
                 continue
 
             if field_obj.type == "many2one":
-                if isinstance(value, int):
-                    rec = record.env[field_obj.comodel_name].browse(value)
-                    processed[field] = self._record_label(rec) if rec.exists() else value
-                elif hasattr(value, "display_name"):
-                    processed[field] = self._record_label(value)
+                # Leverage Odoo's batch prefetching
+                relation_record = record[field]
+                if relation_record:
+                    processed[field] = self._record_label(relation_record)
                 else:
                     processed[field] = value
 
             elif field_obj.type in ("one2many", "many2many"):
-                # Handle lists of IDs or recordsets
-                if isinstance(value, list) and value and isinstance(value[0], int):
-                    recs = record.env[field_obj.comodel_name].browse(value)
-                    processed[field] = [self._record_label(r) for r in recs if r.exists()]
-                elif hasattr(value, "__iter__"):
-                    processed[field] = [self._record_label(r) for r in value]
+                relation_records = record[field]
+                if relation_records:
+                    processed[field] = [self._record_label(r) for r in relation_records]
                 else:
-                    processed[field] = value
+                    processed[field] = []
 
             else:
                 processed[field] = value
@@ -100,30 +96,22 @@ class KafkaAsyncMixin(models.AbstractModel):
                 if not env["kafka.message.handler"]._ensure_topic_exists(full_topic, model_info=model_info):
                     _logger.warning("Topic %s does not exist and could not be created. Proceeding to create records for later retry.", full_topic)
 
-                #_logger.info("========================================")
-                #_logger.info("Starting background job with %d messages", len(messages))
-                
+                vals_list = []
                 for msg in messages:
-                    try:
-                        #_logger.info("Processing message: %s", msg)
-                        send = {
-                            "message": msg,
-                            "topic": f"{topic}-_-{data_like}",
-                            "operation_type": operation_type,
-                            "sent_status": "pending",
-                            "data_like": data_like,
-                        }
-                        #_logger.info("Data to create: %s", send)
-                        
-                        record = env["kafka.message.handler"].create(send)
-                        #_logger.info("Created record with ID: %s", record.id)
-                        
-                    except Exception as e:
-                        _logger.error("Failed to create kafka.message.handler record: %s", e, exc_info=True)
+                    vals_list.append({
+                        "message": msg,
+                        "topic": full_topic,
+                        "operation_type": operation_type,
+                        "sent_status": "pending",
+                        "data_like": data_like,
+                    })
                 
-                cr.commit()
-                #_logger.info("Committed %d records successfully", len(messages))
-                #_logger.info("========================================")
+                try:
+                    env["kafka.message.handler"].create(vals_list)
+                    cr.commit()
+                except Exception as e:
+                    cr.rollback()
+                    _logger.error("Failed to batch create kafka.message.handler records: %s", e, exc_info=True)
                 
         except Exception as e:
             _logger.error("Background job failed completely: %s", e, exc_info=True)
