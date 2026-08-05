@@ -24,6 +24,12 @@
                         <setting string="AWS Secret Key" help="Secret Access Key for IAM authentication." invisible="not kafka_producer_use_sasl_iam">
                             <field name="kafka_producer_aws_secret_access_key" password="True"/>
                         </setting>
+                        <setting string="Max Sender Workers" help="Maximum thread count for general Kafka message transmission.">
+                            <field name="kafka_producer_max_workers"/>
+                        </setting>
+                        <setting string="Max Dump Workers" help="Maximum thread count for historical dumps.">
+                            <field name="kafka_producer_max_dump_workers"/>
+                        </setting>
                     </block>
                 </app>
             </xpath>

@@ -1,14 +1,35 @@
 import json
 import datetime
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from odoo import models, api
 import odoo
 
 _logger = logging.getLogger(__name__)
 
-# Global thread pool
-executor = ThreadPoolExecutor(max_workers=4)
+# Global thread pool helper
+_executor = None
+_executor_workers = 0
+_executor_lock = threading.Lock()
+
+def get_executor(env):
+    global _executor, _executor_workers
+    Config = env['ir.config_parameter'].sudo()
+    try:
+        max_workers = int(Config.get_param('kafka_producer.max_workers', '4'))
+    except ValueError:
+        max_workers = 4
+    if max_workers <= 0:
+        max_workers = 1
+        
+    with _executor_lock:
+        if _executor is None or _executor_workers != max_workers:
+            if _executor is not None:
+                _executor.shutdown(wait=False)
+            _executor = ThreadPoolExecutor(max_workers=max_workers)
+            _executor_workers = max_workers
+        return _executor
 
 
 class KafkaAsyncMixin(models.AbstractModel):
@@ -153,7 +174,7 @@ class KafkaAsyncMixin(models.AbstractModel):
         #_logger.info("========================================")
         #_logger.info("Sending Kafka messages for %s: %s", records)
 
-        executor.submit(self._background_job, messages, records[0]._name if records else "unknown", operation_type, data_like)
+        get_executor(self.env).submit(self._background_job, messages, records[0]._name if records else "unknown", operation_type, data_like)
 
     def query_ids(self, rec_ids, model_name, fields=None):
         if not rec_ids:

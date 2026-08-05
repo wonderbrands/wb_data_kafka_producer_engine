@@ -5,18 +5,17 @@ import uuid
 import logging
 import time
 from datetime import datetime
-from confluent_kafka import Producer, Consumer, TopicPartition
-from confluent_kafka.admin import AdminClient, NewTopic
-try:
-    from confluent_kafka.admin import ConsumerGroupTopicPartitions
-except ImportError:
-    from confluent_kafka.admin import _ConsumerGroupTopicPartitions as ConsumerGroupTopicPartitions
-from confluent_kafka import KafkaException
-from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
-from odoo import api, fields, models
+from odoo import api, fields, models, SUPERUSER_ID
 from odoo.exceptions import UserError
+import queue
+import threading
 
 _logger = logging.getLogger(__name__)
+
+# Send Queue and Workers
+_send_queue = queue.Queue()
+_workers = []
+_workers_lock = threading.Lock()
 
 
 class KafkaMessageHandler(models.Model):
@@ -24,7 +23,7 @@ class KafkaMessageHandler(models.Model):
     _description = 'Kafka Message Handler'
     _order = 'sent_date desc, id desc'
 
-    _cached_producer = None
+    _cached_producers = {}
     _known_topics = set()
 
     message = fields.Text('Message')
@@ -66,8 +65,8 @@ class KafkaMessageHandler(models.Model):
 
     def _get_producer(self, model_info=None):
         """Return cached producer or create a new one."""
-        if KafkaMessageHandler._cached_producer is not None:
-            return {'producer': KafkaMessageHandler._cached_producer, 'error': False}
+        from confluent_kafka import Producer
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 
         config = self._get_kafka_config()
         brokers = config['brokers']
@@ -87,6 +86,10 @@ class KafkaMessageHandler(models.Model):
 
         if not brokers:
             return {'producer': None, 'error': True, 'message': "No bootstrap servers found"}
+
+        brokers_key = ','.join(sorted(brokers))
+        if brokers_key in KafkaMessageHandler._cached_producers:
+            return {'producer': KafkaMessageHandler._cached_producers[brokers_key], 'error': False}
 
         Config = self.env['ir.config_parameter'].sudo()
         use_sasl_iam = Config.get_param('kafka_producer.use_sasl_iam', 'True') == 'True'
@@ -114,7 +117,7 @@ class KafkaMessageHandler(models.Model):
 
         try:
             producer = Producer(conf)
-            KafkaMessageHandler._cached_producer = producer
+            KafkaMessageHandler._cached_producers[brokers_key] = producer
             return {'producer': producer, 'error': False}
         except Exception as e:
             _logger.error("Error creating Kafka producer: %s", e)
@@ -122,6 +125,9 @@ class KafkaMessageHandler(models.Model):
 
     def _ensure_topic_exists(self, topic_name, model_info=None):
         """Ensure topic exists, creating it if necessary."""
+        from confluent_kafka.admin import AdminClient, NewTopic
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+
         if topic_name in KafkaMessageHandler._known_topics:
             return True
 
@@ -204,105 +210,165 @@ class KafkaMessageHandler(models.Model):
             _logger.error("Error in _ensure_topic_exists for %s: %s", topic_name, e)
             return False
 
+    @api.model_create_multi
     def create(self, vals_list):
+        for vals in vals_list:
+            if 'sent_status' not in vals:
+                vals['sent_status'] = 'pending'
         records = super().create(vals_list)
-        producers_to_flush = set()
-        for record in records:
-            # Derive model name from topic (format is model_name-_-api_like or model_name-_-schema_like)
-            model_name = record.topic.split('-_-')[0] if record.topic else False
-            model_info = self.env["followed.model"].sudo().search([("model.model", "=", model_name)], limit=1)
-            
-            # Ensure topic exists before sending
-            self._ensure_topic_exists(record.topic, model_info=model_info)
-            
-            kafka = self._get_producer(model_info=model_info)
-            record.sent_status = 'pending'
-
-            if kafka and kafka['producer']:
-                try:
-                    kafka['producer'].produce(
-                        topic=record.topic,
-                        value=record.message.encode('utf-8') if record.message else b'',
-                        key=record.operation_type.encode('utf-8') if record.operation_type else None
-                    )
-                    producers_to_flush.add(kafka['producer'])
-                    record.sent_status = 'sent'
-                    record.sent_date = datetime.now()
-
-                    # Overwrite message to only contain the odoo_internal_id on success
-                    try:
-                        if record.message:
-                            msg_data = json.loads(record.message)
-                            if isinstance(msg_data, str):
-                                msg_data = json.loads(msg_data)
-                            if isinstance(msg_data, dict) and 'odoo_internal_id' in msg_data:
-                                record.message = str(msg_data['odoo_internal_id'])
-                    except Exception as json_err:
-                        _logger.warning("Could not parse message or find odoo_internal_id on creation success: %s", json_err)
-                except Exception as e:
-                    record.sent_status = 'failed'
-                    record.error_message = str(e)
-            else:
-                record.sent_status = 'not_configured'
-                if kafka:
-                    record.error_message = kafka.get('message')
-
-        for producer in producers_to_flush:
-            try:
-                producer.flush()
-            except Exception as flush_err:
-                _logger.error("Error flushing Kafka producer: %s", flush_err)
-
+        
+        self._ensure_workers_started()
+        dbname = self.env.cr.dbname
+        record_ids = records.ids
+        
+        self.env.cr.postcommit.add(
+            lambda: self._queue_message_ids(dbname, record_ids)
+        )
         return records
 
     def action_retry(self):
-        records_not_sent = self.search([('sent_status', '!=', 'sent')])
+        records_not_sent = self.filtered(lambda r: r.sent_status != 'sent')
+        if not records_not_sent:
+            records_not_sent = self.search([('sent_status', '!=', 'sent')])
+            
         if records_not_sent:
-            for record in records_not_sent:
-                # Derive model name from topic
-                model_name = record.topic.split('-_-')[0] if record.topic else False
-                model_info = self.env["followed.model"].sudo().search([("model.model", "=", model_name)], limit=1)
-                
-                self._ensure_topic_exists(record.topic, model_info=model_info)
-                kafka = self._get_producer(model_info=model_info)
-                if kafka and kafka['producer']:
-                    try:
-                        kafka['producer'].produce(
-                            topic=record.topic,
-                            value=record.message.encode('utf-8') if record.message else b'',
-                            key=record.operation_type.encode('utf-8') if record.operation_type else None
-                        )
-                        kafka['producer'].flush()
-                        record.sent_status = 'sent'
-                        record.sent_date = datetime.now()
-
-                        # Add log of successful retry to error_message
-                        current_error = record.error_message or ''
-                        log_msg = f"Reenviado con éxito el {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                        record.error_message = f"{current_error}\n{log_msg}" if current_error else log_msg
-
-                        # Overwrite message to only contain the odoo_internal_id on success
-                        try:
-                            if record.message:
-                                msg_data = json.loads(record.message)
-                                if isinstance(msg_data, str):
-                                    msg_data = json.loads(msg_data)
-                                if isinstance(msg_data, dict) and 'odoo_internal_id' in msg_data:
-                                    record.message = str(msg_data['odoo_internal_id'])
-                        except Exception as json_err:
-                            _logger.warning("Could not parse message or find odoo_internal_id on retry success: %s", json_err)
-                    except Exception as e:
-                        record.sent_status = 'failed'
-                        # Add log of failed retry attempt to error_message
-                        current_error = record.error_message or ''
-                        log_msg = f"Intento de reenvío fallido el {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}: {e}"
-                        record.error_message = f"{current_error}\n{log_msg}" if current_error else log_msg
+            records_not_sent.write({
+                'sent_status': 'pending',
+                'error_message': False,
+            })
+            self._ensure_workers_started()
+            dbname = self.env.cr.dbname
+            record_ids = records_not_sent.ids
+            self.env.cr.postcommit.add(
+                lambda: self._queue_message_ids(dbname, record_ids)
+            )
         else:
             raise UserError("No records to retry")
+
+    @classmethod
+    def _queue_message_ids(cls, dbname, ids):
+        for rec_id in ids:
+            _send_queue.put((dbname, rec_id))
+
+    def _ensure_workers_started(self):
+        global _workers
+        Config = self.env['ir.config_parameter'].sudo()
+        try:
+            max_workers = int(Config.get_param('kafka_producer.max_workers', '4'))
+        except ValueError:
+            max_workers = 4
+        if max_workers <= 0:
+            max_workers = 1
+            
+        with _workers_lock:
+            current_worker_count = len(_workers)
+            if current_worker_count < max_workers:
+                needed = max_workers - current_worker_count
+                _logger.info("Starting %d additional Kafka sender worker threads (total %d)", needed, max_workers)
+                for i in range(needed):
+                    t = threading.Thread(
+                        target=self._queue_worker_loop,
+                        daemon=True,
+                        name=f"KafkaSenderWorker-{current_worker_count + i}"
+                    )
+                    t.start()
+                    _workers.append(t)
+
+    @classmethod
+    def _queue_worker_loop(cls):
+        while True:
+            try:
+                dbname, record_id = _send_queue.get()
+                items = [(dbname, record_id)]
+                try:
+                    while len(items) < 100:
+                        db, rec_id = _send_queue.get_nowait()
+                        items.append((db, rec_id))
+                except queue.Empty:
+                    pass
+                
+                by_db = {}
+                for db, rec_id in items:
+                    by_db.setdefault(db, []).append(rec_id)
+                
+                for db, rec_ids in by_db.items():
+                    cls._process_queue_batch(db, rec_ids)
+                    
+                for _ in range(len(items)):
+                    _send_queue.task_done()
+            except Exception as e:
+                _logger.error("Exception in Kafka sender worker loop: %s", e, exc_info=True)
+                time.sleep(1)
+
+    @classmethod
+    def _process_queue_batch(cls, dbname, record_ids):
+        from confluent_kafka import Producer
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+
+        try:
+            with odoo.modules.registry.Registry(dbname).cursor() as cr:
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                records = env['kafka.message.handler'].browse(record_ids).exists()
+                if not records:
+                    return
+                
+                records_to_send = records.filtered(lambda r: r.sent_status in ('pending', 'failed'))
+                if not records_to_send:
+                    return
+                
+                producers_to_flush = set()
+                
+                for record in records_to_send:
+                    model_name = record.topic.split('-_-')[0] if record.topic else False
+                    model_info = env["followed.model"].sudo().search([("model.model", "=", model_name)], limit=1)
+                    
+                    record._ensure_topic_exists(record.topic, model_info=model_info)
+                    kafka = record._get_producer(model_info=model_info)
+                    
+                    if kafka and kafka['producer']:
+                        try:
+                            kafka['producer'].produce(
+                                topic=record.topic,
+                                value=record.message.encode('utf-8') if record.message else b'',
+                                key=record.operation_type.encode('utf-8') if record.operation_type else None
+                            )
+                            producers_to_flush.add(kafka['producer'])
+                            record.sent_status = 'sent'
+                            record.sent_date = datetime.now()
+                            
+                            try:
+                                if record.message:
+                                    msg_data = json.loads(record.message)
+                                    if isinstance(msg_data, str):
+                                        msg_data = json.loads(msg_data)
+                                    if isinstance(msg_data, dict) and 'odoo_internal_id' in msg_data:
+                                        record.message = str(msg_data['odoo_internal_id'])
+                            except Exception as json_err:
+                                _logger.warning("Could not parse message or find odoo_internal_id on queue success: %s", json_err)
+                        except Exception as e:
+                            record.sent_status = 'failed'
+                            record.error_message = str(e)
+                    else:
+                        record.sent_status = 'not_configured'
+                        if kafka:
+                            record.error_message = kafka.get('message')
+                            
+                for producer in producers_to_flush:
+                    try:
+                        producer.flush()
+                    except Exception as flush_err:
+                        _logger.error("Error flushing Kafka producer in worker: %s", flush_err)
+                cr.commit()
+        except Exception as e:
+            _logger.error("Error in _process_queue_batch for DB %s, records %s: %s", dbname, record_ids, e, exc_info=True)
 
     @api.model
     def get_kafka_topics(self):
         """Fetch all topics from Kafka with message counts"""
+        from confluent_kafka import Consumer, TopicPartition
+        from confluent_kafka.admin import AdminClient
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+
         # Trigger cached setup or get config
         kafka_info = self._get_producer() 
         if kafka_info.get('error'):
@@ -378,6 +444,9 @@ class KafkaMessageHandler(models.Model):
     @api.model
     def get_kafka_messages(self, topic_name, count=4):
         """Fetch the last N messages from a topic"""
+        from confluent_kafka import Consumer, TopicPartition
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+
         kafka_info = self._get_producer()
         if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}
@@ -457,6 +526,9 @@ class KafkaMessageHandler(models.Model):
     @api.model
     def delete_kafka_topic(self, topic_name):
         """Delete a topic from Kafka"""
+        from confluent_kafka.admin import AdminClient
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+
         kafka_info = self._get_producer()
         if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}
@@ -484,7 +556,7 @@ class KafkaMessageHandler(models.Model):
             futures = admin_client.delete_topics([topic_name], operation_timeout=10.0)
             for topic, future in futures.items():
                 future.result()
-            KafkaMessageHandler._cached_producer = None
+            KafkaMessageHandler._cached_producers.clear()
             return True
         except Exception as e:
             return {'error': str(e)}
@@ -492,6 +564,9 @@ class KafkaMessageHandler(models.Model):
     @api.model
     def get_kafka_consumer_groups(self):
         """Fetch all consumer groups from Kafka"""
+        from confluent_kafka.admin import AdminClient
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+
         kafka_info = self._get_producer()
         if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}
@@ -528,6 +603,14 @@ class KafkaMessageHandler(models.Model):
     @api.model
     def get_kafka_consumer_group_details(self, group_id):
         """Fetch details (offsets, lag) for a consumer group"""
+        from confluent_kafka import Consumer, TopicPartition
+        from confluent_kafka.admin import AdminClient
+        try:
+            from confluent_kafka.admin import ConsumerGroupTopicPartitions
+        except ImportError:
+            from confluent_kafka.admin import _ConsumerGroupTopicPartitions as ConsumerGroupTopicPartitions
+        from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+
         kafka_info = self._get_producer()
         if kafka_info.get('error'):
             return {'error': kafka_info.get('message')}

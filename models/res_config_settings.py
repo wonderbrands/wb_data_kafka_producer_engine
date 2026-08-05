@@ -31,3 +31,16 @@ class ResConfigSettings(models.TransientModel):
         default="us-east-1",
         help="AWS Region where the MSK cluster is located"
     )
+    kafka_producer_max_workers = fields.Integer(
+        string="Max Sender Workers",
+        config_parameter='kafka_producer.max_workers',
+        default=4,
+        help="Maximum thread count for general Kafka message transmission."
+    )
+    kafka_producer_max_dump_workers = fields.Integer(
+        string="Max Dump Workers",
+        config_parameter='kafka_producer.max_dump_workers',
+        default=2,
+        help="Maximum thread count for historical dumps."
+    )
+

@@ -4,12 +4,33 @@ import logging
 import json
 import odoo
 import datetime
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 _logger = logging.getLogger(__name__)
 
-# Global thread pool for dumps
-dump_executor = ThreadPoolExecutor(max_workers=2)
+# Global thread pool helper for dumps
+_dump_executor = None
+_dump_executor_workers = 0
+_dump_executor_lock = threading.Lock()
+
+def get_dump_executor(env):
+    global _dump_executor, _dump_executor_workers
+    Config = env['ir.config_parameter'].sudo()
+    try:
+        max_workers = int(Config.get_param('kafka_producer.max_dump_workers', '2'))
+    except ValueError:
+        max_workers = 2
+    if max_workers <= 0:
+        max_workers = 1
+        
+    with _dump_executor_lock:
+        if _dump_executor is None or _dump_executor_workers != max_workers:
+            if _dump_executor is not None:
+                _dump_executor.shutdown(wait=False)
+            _dump_executor = ThreadPoolExecutor(max_workers=max_workers)
+            _dump_executor_workers = max_workers
+        return _dump_executor
 
 class Dump(models.Model):
     _name = 'dump'
@@ -52,7 +73,7 @@ class Dump(models.Model):
         record = super().create(vals)
         # Process in background after the transaction has successfully committed
         self.env.cr.postcommit.add(
-            lambda: dump_executor.submit(record._process_dump_job, self.env.cr.dbname, record.id)
+            lambda: get_dump_executor(self.env).submit(record._process_dump_job, self.env.cr.dbname, record.id)
         )
         return record
 
