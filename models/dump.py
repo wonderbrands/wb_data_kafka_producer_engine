@@ -59,7 +59,7 @@ class Dump(models.Model):
     def _process_dump_job(self, dbname, dump_id):
         """Worker executed in a thread with a fresh DB cursor"""
         try:
-            with odoo.registry(dbname).cursor() as cr:
+            with odoo.modules.registry.Registry(dbname).cursor() as cr:
                 env = api.Environment(cr, odoo.SUPERUSER_ID, {})
                 dump_record = env['dump'].browse(dump_id)
                 dump_record._process_dump()

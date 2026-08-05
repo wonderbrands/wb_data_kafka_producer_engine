@@ -1,7 +1,7 @@
 import logging
 import json
 from datetime import datetime
-from odoo import api, SUPERUSER_ID, registry
+from odoo import api, SUPERUSER_ID
 
 _logger = logging.getLogger(__name__)
 

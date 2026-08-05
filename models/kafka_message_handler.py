@@ -557,9 +557,9 @@ class KafkaMessageHandler(models.Model):
 
             admin_client = AdminClient(conf)
             
-            future = admin_client.list_consumer_group_offsets([ConsumerGroupTopicPartitions(group_id)])
-            res = future.result()
-            group_partition_offsets = res.get(group_id)
+            futures_dict = admin_client.list_consumer_group_offsets([ConsumerGroupTopicPartitions(group_id)])
+            future = futures_dict.get(group_id)
+            group_partition_offsets = future.result() if future else None
 
             # Use a consumer to get end offsets
             consumer_conf = {

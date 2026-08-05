@@ -86,7 +86,7 @@ class KafkaAsyncMixin(models.AbstractModel):
         
         try:
             # Correct way to get registry
-            with odoo.registry(dbname).cursor() as cr:
+            with odoo.modules.registry.Registry(dbname).cursor() as cr:
                 # Use SUPERUSER_ID to avoid permission issues
                 env = api.Environment(cr, odoo.SUPERUSER_ID, {})
                 

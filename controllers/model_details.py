@@ -71,3 +71,5 @@ class ModelDetails(http.Controller):
             content_type='application/json;charset=utf-8',
             status=200
         )
+
+
