@@ -209,7 +209,13 @@ class KafkaAsyncMixin(models.AbstractModel):
             
             if is_followed.api_like:
                 try:
-                    vals_list = [vals] * len(self)  
+                    stored_computed = [f for f, field in self._fields.items() if field.compute and field.store]
+                    vals_list = []
+                    for record in self:
+                        record_vals = vals.copy()
+                        for f in stored_computed:
+                            record_vals[f] = record[f]
+                        vals_list.append(record_vals)
                     self._create_kafka_message_async(self, vals_list=vals_list, operation_type="update", data_like="api_like")
                 except Exception:
                     _logger.error("Error preparing Kafka messages for write", exc_info=True)
@@ -236,7 +242,12 @@ class KafkaAsyncMixin(models.AbstractModel):
         if is_followed: 
             if is_followed.api_like:
                 try:
-                    self._create_kafka_message_async(record, vals_list=[vals], operation_type="create", data_like="api_like")
+                    self.env.cr.flush()
+                    stored_computed = [f for f, field in record._fields.items() if field.compute and field.store]
+                    record_vals = vals.copy()
+                    for f in stored_computed:
+                        record_vals[f] = record[f]
+                    self._create_kafka_message_async(record, vals_list=[record_vals], operation_type="create", data_like="api_like")
                 except Exception:
                     _logger.error("Error preparing Kafka messages for create", exc_info=True)
 
