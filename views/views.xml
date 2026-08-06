@@ -32,7 +32,7 @@
                     <group name="computed_fields" string="Followed Computed Fields">
                         <field name="computed_fields">
                             <list editable="bottom">
-                                <field name="field_id" domain="[('model_id', '=', parent.model), ('compute', '!=', False)]" options="{'no_create': True}"/>
+                                <field name="field_id" domain="[('model_id', '=', parent.model)]" options="{'no_create': True}"/>
                                 <field name="name"/>
                             </list>
                         </field>

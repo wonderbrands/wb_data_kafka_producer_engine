@@ -12,7 +12,7 @@ class FollowedComputedField(models.Model):
     _description = 'Followed Computed Field'
 
     followed_model_id = fields.Many2one('followed.model', 'Followed Model', ondelete='cascade', required=True)
-    field_id = fields.Many2one('ir.model.fields', 'Computed Field', required=True)
+    field_id = fields.Many2one('ir.model.fields', 'Computed Field', required=True, ondelete='cascade')
     name = fields.Char(related='field_id.name', string='Field Name', readonly=True)
 
 class FollowedModel(models.Model):
