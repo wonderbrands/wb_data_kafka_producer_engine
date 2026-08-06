@@ -117,6 +117,8 @@ class Dump(models.Model):
                 if not self.env['kafka.message.handler']._ensure_topic_exists(f"{model_name}-_-schema_like", model_info=model_info):
                     _logger.warning("Topic %s-_-schema_like does not exist and could not be created. Records will be created as pending.", model_name)
 
+            computed_fields = [f for f in model_info.computed_fields.mapped('name') if f] if model_info else []
+
             # Process in batches
             batch_size = 100
             progress = 0
@@ -140,6 +142,11 @@ class Dump(models.Model):
                         # Process based on flags
                         if self.api_like and rec.id in records_dict:
                             data = self._prepare_vals(rec, records_dict[rec.id])
+                            for f in computed_fields:
+                                try:
+                                    data[f] = rec[f]
+                                except Exception:
+                                    pass
                             data.update({
                                 "odoo_internal_id": rec.id,
                                 "operation": "dump",
@@ -155,7 +162,12 @@ class Dump(models.Model):
                             })
 
                         if self.schema_like and rec.id in db_rows_dict:
-                            data = db_rows_dict[rec.id]
+                            data = db_rows_dict[rec.id].copy()
+                            for f in computed_fields:
+                                try:
+                                    data[f] = rec[f]
+                                except Exception:
+                                    pass
                             data.update({
                                 "odoo_internal_id": rec.id,
                                 "operation": "dump",

@@ -218,7 +218,7 @@ class KafkaAsyncMixin(models.AbstractModel):
             
             if is_followed.api_like:
                 try:
-                    computed_fields = [f for f, field in self._fields.items() if field.compute]
+                    computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f]
                     vals_list = []
                     for record in self:
                         record_vals = vals.copy()
@@ -238,7 +238,7 @@ class KafkaAsyncMixin(models.AbstractModel):
                     ids = self.ids
                     rows = self.query_ids(ids, self._name)
                     rows_by_id = {row['id']: row for row in rows}
-                    computed_fields = [f for f, field in self._fields.items() if field.compute]
+                    computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f]
                     vals_list = []
                     for record in self:
                         if record.id in rows_by_id:
@@ -265,7 +265,7 @@ class KafkaAsyncMixin(models.AbstractModel):
             if is_followed.api_like:
                 try:
                     self.env.cr.flush()
-                    computed_fields = [f for f, field in record._fields.items() if field.compute]
+                    computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f]
                     record_vals = vals.copy()
                     for f in computed_fields:
                         try:
@@ -281,7 +281,7 @@ class KafkaAsyncMixin(models.AbstractModel):
                     rows = self.query_ids([record.id], record._name)
                     if rows:
                         row_vals = rows[0].copy()
-                        computed_fields = [f for f, field in record._fields.items() if field.compute]
+                        computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f]
                         for f in computed_fields:
                             try:
                                 row_vals[f] = record[f]

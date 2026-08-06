@@ -4,3 +4,4 @@ access_kafka_message_handler_user,access.kafka.message.handler.user,model_kafka_
 access_kafka_message_bootstrap_serv,access.kafka.message.bootstarp.serv,model_bootstrap_servers,wb_data_kafka_producer_engine.group_kafka_admin,1,1,1,1
 access_ir_model_user,access.ir.model.user,base.model_ir_model,base.group_user,1,0,1,0
 access_dump_user,access.dump.user,model_dump,wb_data_kafka_producer_engine.group_kafka_admin,1,1,1,1
+access_followed_computed_field,access.followed.computed.field,model_followed_computed_field,wb_data_kafka_producer_engine.group_kafka_admin,1,1,1,1

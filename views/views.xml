@@ -29,6 +29,14 @@
                         <field name="api_like" />
                         <field name="schema_like" />
                     </group>
+                    <group name="computed_fields" string="Followed Computed Fields">
+                        <field name="computed_fields">
+                            <list editable="bottom">
+                                <field name="field_id" domain="[('model_id', '=', parent.model), ('compute', '!=', False)]" options="{'no_create': True}"/>
+                                <field name="name"/>
+                            </list>
+                        </field>
+                    </group>
                 </sheet>
             </form>
         </field>

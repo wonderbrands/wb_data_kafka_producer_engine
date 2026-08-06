@@ -7,6 +7,14 @@ class BootstrapServers(models.Model):
     bootstrap_server = fields.Char('Bootstrap Servers')
     followed_model = fields.Many2one('followed.model', 'Followed Model')
 
+class FollowedComputedField(models.Model):
+    _name = 'followed.computed.field'
+    _description = 'Followed Computed Field'
+
+    followed_model_id = fields.Many2one('followed.model', 'Followed Model', ondelete='cascade', required=True)
+    field_id = fields.Many2one('ir.model.fields', 'Computed Field', required=True)
+    name = fields.Char(related='field_id.name', string='Field Name', readonly=True)
+
 class FollowedModel(models.Model):
     _name = 'followed.model'
     _description = 'Followed Model'
@@ -16,6 +24,7 @@ class FollowedModel(models.Model):
     use_uniques_bss = fields.Boolean('Use Uniques Bootstrap Servers')
     api_like = fields.Boolean('API Like')
     schema_like = fields.Boolean('Schema Like')
+    computed_fields = fields.One2many('followed.computed.field', 'followed_model_id', 'Followed Computed Fields')
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -26,7 +35,7 @@ class FollowedModel(models.Model):
 
     def write(self, vals):
         res = super().write(vals)
-        if any(field in vals for field in ['api_like', 'schema_like', 'model', 'bootstrap_servers', 'use_uniques_bss']):
+        if any(field in vals for field in ['api_like', 'schema_like', 'model', 'bootstrap_servers', 'use_uniques_bss', 'computed_fields']):
             for record in self:
                 record._create_kafka_topics()
         return res
