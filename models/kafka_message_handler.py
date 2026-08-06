@@ -5,6 +5,7 @@ import uuid
 import logging
 import time
 from datetime import datetime
+import odoo
 from odoo import api, fields, models, SUPERUSER_ID
 from odoo.exceptions import UserError
 import queue
