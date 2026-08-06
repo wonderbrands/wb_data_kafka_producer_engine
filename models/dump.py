@@ -117,7 +117,8 @@ class Dump(models.Model):
                 if not self.env['kafka.message.handler']._ensure_topic_exists(f"{model_name}-_-schema_like", model_info=model_info):
                     _logger.warning("Topic %s-_-schema_like does not exist and could not be created. Records will be created as pending.", model_name)
 
-            computed_fields = [f for f in model_info.computed_fields.mapped('name') if f] if model_info else []
+            binary_fields = [f for f, field in self.env[model_name]._fields.items() if field.type == 'binary'] if (model_info and model_info.exclude_binary) else []
+            computed_fields = [f for f in model_info.computed_fields.mapped('name') if f and f not in binary_fields] if model_info else []
 
             # Process in batches
             batch_size = 100
@@ -141,7 +142,8 @@ class Dump(models.Model):
                     try:
                         # Process based on flags
                         if self.api_like and rec.id in records_dict:
-                            data = self._prepare_vals(rec, records_dict[rec.id])
+                            clean_vals = {k: v for k, v in records_dict[rec.id].items() if k not in binary_fields}
+                            data = self._prepare_vals(rec, clean_vals)
                             for f in computed_fields:
                                 try:
                                     data[f] = rec[f]
@@ -162,7 +164,7 @@ class Dump(models.Model):
                             })
 
                         if self.schema_like and rec.id in db_rows_dict:
-                            data = db_rows_dict[rec.id].copy()
+                            data = {k: v for k, v in db_rows_dict[rec.id].items() if k not in binary_fields}
                             for f in computed_fields:
                                 try:
                                     data[f] = rec[f]

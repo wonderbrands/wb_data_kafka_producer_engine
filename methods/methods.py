@@ -215,13 +215,14 @@ class KafkaAsyncMixin(models.AbstractModel):
         
         if is_followed and res:
             self.env.cr.flush()
+            binary_fields = [f for f, field in self._fields.items() if field.type == 'binary'] if is_followed.exclude_binary else []
+            computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f and f not in binary_fields]
             
             if is_followed.api_like:
                 try:
-                    computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f]
                     vals_list = []
                     for record in self:
-                        record_vals = vals.copy()
+                        record_vals = {k: v for k, v in vals.items() if k not in binary_fields}
                         for f in computed_fields:
                             try:
                                 record_vals[f] = record[f]
@@ -238,11 +239,10 @@ class KafkaAsyncMixin(models.AbstractModel):
                     ids = self.ids
                     rows = self.query_ids(ids, self._name)
                     rows_by_id = {row['id']: row for row in rows}
-                    computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f]
                     vals_list = []
                     for record in self:
                         if record.id in rows_by_id:
-                            row_vals = rows_by_id[record.id].copy()
+                            row_vals = {k: v for k, v in rows_by_id[record.id].items() if k not in binary_fields}
                             for f in computed_fields:
                                 try:
                                     row_vals[f] = record[f]
@@ -262,11 +262,13 @@ class KafkaAsyncMixin(models.AbstractModel):
         record = super().create(vals)
         is_followed = self.env["followed.model"].sudo().search([("model.model", "=", self._name)], limit=1)
         if is_followed: 
+            binary_fields = [f for f, field in record._fields.items() if field.type == 'binary'] if is_followed.exclude_binary else []
+            computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f and f not in binary_fields]
+
             if is_followed.api_like:
                 try:
                     self.env.cr.flush()
-                    computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f]
-                    record_vals = vals.copy()
+                    record_vals = {k: v for k, v in vals.items() if k not in binary_fields}
                     for f in computed_fields:
                         try:
                             record_vals[f] = record[f]
@@ -280,8 +282,7 @@ class KafkaAsyncMixin(models.AbstractModel):
                 try:
                     rows = self.query_ids([record.id], record._name)
                     if rows:
-                        row_vals = rows[0].copy()
-                        computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f]
+                        row_vals = {k: v for k, v in rows[0].items() if k not in binary_fields}
                         for f in computed_fields:
                             try:
                                 row_vals[f] = record[f]

@@ -24,6 +24,7 @@ class FollowedModel(models.Model):
     use_uniques_bss = fields.Boolean('Use Uniques Bootstrap Servers')
     api_like = fields.Boolean('API Like')
     schema_like = fields.Boolean('Schema Like')
+    exclude_binary = fields.Boolean('Exclude Binary', default=True)
     computed_fields = fields.One2many('followed.computed.field', 'followed_model_id', 'Followed Computed Fields')
 
     @api.model_create_multi
@@ -35,7 +36,7 @@ class FollowedModel(models.Model):
 
     def write(self, vals):
         res = super().write(vals)
-        if any(field in vals for field in ['api_like', 'schema_like', 'model', 'bootstrap_servers', 'use_uniques_bss', 'computed_fields']):
+        if any(field in vals for field in ['api_like', 'schema_like', 'exclude_binary', 'model', 'bootstrap_servers', 'use_uniques_bss', 'computed_fields']):
             for record in self:
                 record._create_kafka_topics()
         return res

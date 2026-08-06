@@ -28,6 +28,7 @@
                     <group name="data" string="Data like">
                         <field name="api_like" />
                         <field name="schema_like" />
+                        <field name="exclude_binary" />
                     </group>
                     <group name="computed_fields" string="Followed Computed Fields">
                         <field name="computed_fields">
