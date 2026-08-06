@@ -218,12 +218,15 @@ class KafkaAsyncMixin(models.AbstractModel):
             
             if is_followed.api_like:
                 try:
-                    stored_computed = [f for f, field in self._fields.items() if field.compute and field.store]
+                    computed_fields = [f for f, field in self._fields.items() if field.compute]
                     vals_list = []
                     for record in self:
                         record_vals = vals.copy()
-                        for f in stored_computed:
-                            record_vals[f] = record[f]
+                        for f in computed_fields:
+                            try:
+                                record_vals[f] = record[f]
+                            except Exception:
+                                pass
                         vals_list.append(record_vals)
                     self._create_kafka_message_async(self, vals_list=vals_list, operation_type="update", data_like="api_like")
                 except Exception:
@@ -231,11 +234,21 @@ class KafkaAsyncMixin(models.AbstractModel):
 
             if is_followed.schema_like:
                 try:
-                    # Batch fetch all database rows in one SQL query instead of N queries in a loop!
+                    # Batch fetch all database rows in one SQL query
                     ids = self.ids
                     rows = self.query_ids(ids, self._name)
                     rows_by_id = {row['id']: row for row in rows}
-                    vals_list = [rows_by_id[record.id] for record in self if record.id in rows_by_id]
+                    computed_fields = [f for f, field in self._fields.items() if field.compute]
+                    vals_list = []
+                    for record in self:
+                        if record.id in rows_by_id:
+                            row_vals = rows_by_id[record.id].copy()
+                            for f in computed_fields:
+                                try:
+                                    row_vals[f] = record[f]
+                                except Exception:
+                                    pass
+                            vals_list.append(row_vals)
                     if vals_list:
                         self._create_kafka_message_async(self, vals_list=vals_list, operation_type="update", data_like="schema_like")
                 except Exception:
@@ -252,10 +265,13 @@ class KafkaAsyncMixin(models.AbstractModel):
             if is_followed.api_like:
                 try:
                     self.env.cr.flush()
-                    stored_computed = [f for f, field in record._fields.items() if field.compute and field.store]
+                    computed_fields = [f for f, field in record._fields.items() if field.compute]
                     record_vals = vals.copy()
-                    for f in stored_computed:
-                        record_vals[f] = record[f]
+                    for f in computed_fields:
+                        try:
+                            record_vals[f] = record[f]
+                        except Exception:
+                            pass
                     self._create_kafka_message_async(record, vals_list=[record_vals], operation_type="create", data_like="api_like")
                 except Exception:
                     _logger.error("Error preparing Kafka messages for create", exc_info=True)
@@ -264,7 +280,14 @@ class KafkaAsyncMixin(models.AbstractModel):
                 try:
                     rows = self.query_ids([record.id], record._name)
                     if rows:
-                        self._create_kafka_message_async(record, vals_list=[rows[0]], operation_type="create", data_like="schema_like")
+                        row_vals = rows[0].copy()
+                        computed_fields = [f for f, field in record._fields.items() if field.compute]
+                        for f in computed_fields:
+                            try:
+                                row_vals[f] = record[f]
+                            except Exception:
+                                pass
+                        self._create_kafka_message_async(record, vals_list=[row_vals], operation_type="create", data_like="schema_like")
                 except Exception:
                     _logger.error("Error preparing Kafka messages for create", exc_info=True)
         return record
