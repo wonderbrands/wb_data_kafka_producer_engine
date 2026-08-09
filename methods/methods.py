@@ -98,34 +98,22 @@ class KafkaAsyncMixin(models.AbstractModel):
 
         return processed
 
-    def _background_job(self, messages, topic, operation_type, data_like):
-        """Worker executed in a thread with a fresh DB cursor"""
-        if not messages:
+    @api.model
+    def _process_kafka_postcommit_job(self, dbname, vals_list):
+        """Worker executed in a thread with a fresh DB cursor to bulk create handler records"""
+        if not vals_list:
             return
         
-        dbname = self.env.cr.dbname
-        
         try:
-            # Correct way to get registry
             with odoo.modules.registry.Registry(dbname).cursor() as cr:
-                # Use SUPERUSER_ID to avoid permission issues
                 env = api.Environment(cr, odoo.SUPERUSER_ID, {})
                 
-                # Check if topic exists/can be created (once per batch for efficiency)
-                full_topic = f"{topic}-_-{data_like}"
-                model_info = env["followed.model"].search([("model.model", "=", topic)], limit=1)
-                if not env["kafka.message.handler"]._ensure_topic_exists(full_topic, model_info=model_info):
-                    _logger.warning("Topic %s does not exist and could not be created. Proceeding to create records for later retry.", full_topic)
-
-                vals_list = []
-                for msg in messages:
-                    vals_list.append({
-                        "message": msg,
-                        "topic": full_topic,
-                        "operation_type": operation_type,
-                        "sent_status": "pending",
-                        "data_like": data_like,
-                    })
+                # Check topic existence (cached in class variable _known_topics)
+                topics = {v['topic'] for v in vals_list}
+                for full_topic in topics:
+                    model_name = full_topic.split('-_-')[0]
+                    model_info = env["followed.model"].search([("model.model", "=", model_name)], limit=1)
+                    env["kafka.message.handler"]._ensure_topic_exists(full_topic, model_info=model_info)
                 
                 try:
                     env["kafka.message.handler"].create(vals_list)
@@ -135,13 +123,11 @@ class KafkaAsyncMixin(models.AbstractModel):
                     _logger.error("Failed to batch create kafka.message.handler records: %s", e, exc_info=True)
                 
         except Exception as e:
-            _logger.error("Background job failed completely: %s", e, exc_info=True)
-
-
+            _logger.error("Postcommit Kafka job failed completely: %s", e, exc_info=True)
 
     def _create_kafka_message_async(self, records, vals_list, operation_type, data_like):
         """
-        Prepare messages for records and submit to executor.
+        Prepare messages for records and queue them to be processed post-commit.
         For create/write, vals_list is required. For delete, pass None.
         """
         messages = []
@@ -171,10 +157,41 @@ class KafkaAsyncMixin(models.AbstractModel):
                 }
                 messages.append(json.dumps(data, default=self._convert))
 
-        #_logger.info("========================================")
-        #_logger.info("Sending Kafka messages for %s: %s", records)
+        cr = self.env.cr
+        callback_exists = False
+        if hasattr(cr, '_kafka_callback'):
+            try:
+                if cr._kafka_callback in cr.postcommit._funcs:
+                    callback_exists = True
+            except Exception:
+                pass
 
-        get_executor(self.env).submit(self._background_job, messages, records[0]._name if records else "unknown", operation_type, data_like)
+        if not callback_exists:
+            cr._kafka_pending_messages = []
+            dbname = cr.dbname
+            
+            def postcommit_callback():
+                pending_messages = list(cr._kafka_pending_messages)
+                cr._kafka_pending_messages.clear()
+                if pending_messages:
+                    self.env['base']._process_kafka_postcommit_job(
+                        dbname,
+                        pending_messages
+                    )
+            
+            cr._kafka_callback = postcommit_callback
+            cr.postcommit.add(postcommit_callback)
+
+
+
+        for msg in messages:
+            cr._kafka_pending_messages.append({
+                "message": msg,
+                "topic": f"{records[0]._name if records else 'unknown'}-_-{data_like}",
+                "operation_type": operation_type,
+                "sent_status": "pending",
+                "data_like": data_like,
+            })
 
     def query_ids(self, rec_ids, model_name, fields=None):
         if not rec_ids:
@@ -257,41 +274,51 @@ class KafkaAsyncMixin(models.AbstractModel):
         return res
 
 
-    @api.model
-    def create(self, vals):
-        record = super().create(vals)
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
         is_followed = self.env["followed.model"].sudo().search([("model.model", "=", self._name)], limit=1)
         if is_followed: 
-            binary_fields = [f for f, field in record._fields.items() if field.type == 'binary'] if is_followed.exclude_binary else []
+            binary_fields = [f for f, field in records._fields.items() if field.type == 'binary'] if is_followed.exclude_binary else []
             computed_fields = [f for f in is_followed.computed_fields.mapped('name') if f and f not in binary_fields]
 
             if is_followed.api_like:
                 try:
                     self.env.cr.flush()
-                    record_vals = {k: v for k, v in vals.items() if k not in binary_fields}
-                    for f in computed_fields:
-                        try:
-                            record_vals[f] = record[f]
-                        except Exception:
-                            pass
-                    self._create_kafka_message_async(record, vals_list=[record_vals], operation_type="create", data_like="api_like")
+                    api_vals_list = []
+                    for record, vals in zip(records, vals_list):
+                        record_vals = {k: v for k, v in vals.items() if k not in binary_fields}
+                        for f in computed_fields:
+                            try:
+                                record_vals[f] = record[f]
+                            except Exception:
+                                pass
+                        api_vals_list.append(record_vals)
+                    self._create_kafka_message_async(records, vals_list=api_vals_list, operation_type="create", data_like="api_like")
                 except Exception:
-                    _logger.error("Error preparing Kafka messages for create", exc_info=True)
+                    _logger.error("Error preparing Kafka messages for create (api_like)", exc_info=True)
 
             if is_followed.schema_like:
                 try:
-                    rows = self.query_ids([record.id], record._name)
-                    if rows:
-                        row_vals = {k: v for k, v in rows[0].items() if k not in binary_fields}
-                        for f in computed_fields:
-                            try:
-                                row_vals[f] = record[f]
-                            except Exception:
-                                pass
-                        self._create_kafka_message_async(record, vals_list=[row_vals], operation_type="create", data_like="schema_like")
+                    # Batch fetch all database rows in one SQL query
+                    ids = records.ids
+                    rows = self.query_ids(ids, records._name)
+                    rows_by_id = {row['id']: row for row in rows}
+                    schema_vals_list = []
+                    for record in records:
+                        if record.id in rows_by_id:
+                            row_vals = {k: v for k, v in rows_by_id[record.id].items() if k not in binary_fields}
+                            for f in computed_fields:
+                                try:
+                                    row_vals[f] = record[f]
+                                except Exception:
+                                    pass
+                            schema_vals_list.append(row_vals)
+                    if schema_vals_list:
+                        self._create_kafka_message_async(records, vals_list=schema_vals_list, operation_type="create", data_like="schema_like")
                 except Exception:
-                    _logger.error("Error preparing Kafka messages for create", exc_info=True)
-        return record
+                    _logger.error("Error preparing Kafka messages for create (schema_like)", exc_info=True)
+        return records
 
 
     # ------------------------------
