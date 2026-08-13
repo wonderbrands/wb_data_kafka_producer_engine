@@ -15,7 +15,7 @@
     'category': 'Technical',
     'version': '19.0',
 
-    'depends': ['base'],
+    'depends': ['base', 'component_event'],
 
     'external_dependencies': {
         'python': [

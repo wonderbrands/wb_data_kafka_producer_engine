@@ -1,4 +1,4 @@
-from odoo import models, fields, api
+from odoo import models, fields, api, tools
 
 class BootstrapServers(models.Model):
     _name = 'bootstrap.servers'
@@ -27,19 +27,30 @@ class FollowedModel(models.Model):
     exclude_binary = fields.Boolean('Exclude Binary', default=True)
     computed_fields = fields.One2many('followed.computed.field', 'followed_model_id', 'Followed Computed Fields')
 
+    @api.model
+    @tools.ormcache('model_name')
+    def get_followed_model(self, model_name):
+        return self.search([("model.model", "=", model_name)], limit=1)
+
     @api.model_create_multi
     def create(self, vals_list):
         records = super().create(vals_list)
+        self.clear_caches()
         for record in records:
             record._create_kafka_topics()
         return records
 
     def write(self, vals):
         res = super().write(vals)
+        self.clear_caches()
         if any(field in vals for field in ['api_like', 'schema_like', 'exclude_binary', 'model', 'bootstrap_servers', 'use_uniques_bss', 'computed_fields']):
             for record in self:
                 record._create_kafka_topics()
         return res
+
+    def unlink(self):
+        self.clear_caches()
+        return super().unlink()
 
     def _create_kafka_topics(self):
         import threading
@@ -68,5 +79,7 @@ class FollowedModel(models.Model):
                         handler._ensure_topic_exists(topic_name, model_info=record)
                 cr.commit()
 
-        threading.Thread(target=run_in_background, daemon=True).start()
+        self.env.cr.postcommit.add(
+            lambda: threading.Thread(target=run_in_background, daemon=True).start()
+        )
 

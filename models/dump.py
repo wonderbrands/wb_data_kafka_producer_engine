@@ -58,15 +58,13 @@ class Dump(models.Model):
             if record.start_id > record.end_id:
                 raise ValidationError(_("El ID de inicio no puede ser mayor que el ID del final."))
             
-            # Check existence of start_id
-            start_record = self.env[model_name].search([('id', '=', record.start_id)], limit=1)
-            if not start_record:
-                raise ValidationError(_("El ID de inicio (%s) no existe en el modelo %s.") % (record.start_id, model_name))
-            
-            # Check existence of end_id
-            end_record = self.env[model_name].search([('id', '=', record.end_id)], limit=1)
-            if not end_record:
-                raise ValidationError(_("El ID del final (%s) no existe en el modelo %s.") % (record.end_id, model_name))
+            # Check if at least one record exists in the range [start_id, end_id]
+            any_record = self.env[model_name].search([
+                ('id', '>=', record.start_id),
+                ('id', '<=', record.end_id)
+            ], limit=1)
+            if not any_record:
+                raise ValidationError(_("No existen registros en el rango de IDs especificado (%s a %s) para el modelo %s.") % (record.start_id, record.end_id, model_name))
 
     @api.model
     def create(self, vals):
