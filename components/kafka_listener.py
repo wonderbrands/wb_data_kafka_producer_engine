@@ -62,7 +62,7 @@ class KafkaEventListener(Component):
                     model_name = full_topic.split('-_-')[0]
                     model_info = env["followed.model"].sudo().get_followed_model(model_name)
                     if model_info:
-                        model_info = model_info.with_env(env)
+                        model_info = model_info.with_env(env).sudo()
                     env["kafka.message.handler"]._ensure_topic_exists(full_topic, model_info=model_info)
                 
                 try:
@@ -141,7 +141,7 @@ class KafkaEventListener(Component):
             return
         followed = self.env["followed.model"].sudo().get_followed_model(records._name)
         if followed:
-            followed = followed.with_env(self.env)
+            followed = followed.with_env(self.env).sudo()
             binary_fields = [f for f, field in records._fields.items() if field.type == 'binary'] if followed.exclude_binary else []
             computed_fields = [f for f in followed.computed_fields.mapped('name') if f and f not in binary_fields]
             
@@ -179,7 +179,7 @@ class KafkaEventListener(Component):
             return
         followed = self.env["followed.model"].sudo().get_followed_model(records._name)
         if followed:
-            followed = followed.with_env(self.env)
+            followed = followed.with_env(self.env).sudo()
             binary_fields = [f for f, field in records._fields.items() if field.type == 'binary'] if followed.exclude_binary else []
             computed_fields = [f for f in followed.computed_fields.mapped('name') if f and f not in binary_fields]
 
@@ -217,7 +217,7 @@ class KafkaEventListener(Component):
             return
         followed = self.env["followed.model"].sudo().get_followed_model(records._name)
         if followed:
-            followed = followed.with_env(self.env)
+            followed = followed.with_env(self.env).sudo()
             # Prefetch display_name for all records in batch to prevent O(N) database queries
             try:
                 records.mapped('display_name')
