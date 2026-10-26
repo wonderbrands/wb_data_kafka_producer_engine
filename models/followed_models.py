@@ -12,6 +12,7 @@ class FollowedModel(models.Model):
     _description = 'Followed Model'
 
     model = fields.Many2one('ir.model', 'Model')
+    active = fields.Boolean('Active', default=True, help="Switch to enable/disable Kafka topic streaming for this model")
     bootstrap_servers = fields.One2many('bootstrap.servers', 'followed_model', 'Bootstrap Servers')
     use_uniques_bss = fields.Boolean('Use Uniques Bootstrap Servers')
     api_like = fields.Boolean('API Like')
@@ -26,9 +27,10 @@ class FollowedModel(models.Model):
 
     def write(self, vals):
         res = super().write(vals)
-        if any(field in vals for field in ['api_like', 'schema_like', 'model', 'bootstrap_servers', 'use_uniques_bss']):
+        if any(field in vals for field in ['api_like', 'schema_like', 'model', 'bootstrap_servers', 'use_uniques_bss', 'active']):
             for record in self:
-                record._create_kafka_topics()
+                if record.active:
+                    record._create_kafka_topics()
         return res
 
     def _create_kafka_topics(self):
@@ -45,7 +47,7 @@ class FollowedModel(models.Model):
                 env = api.Environment(cr, odoo.SUPERUSER_ID, {})
                 records = env['followed.model'].browse(ids)
                 for record in records:
-                    if not record.model:
+                    if not record.model or not record.active:
                         continue
                     
                     handler = env['kafka.message.handler']

@@ -49,6 +49,8 @@ class Dump(models.Model):
 
     @api.model
     def create(self, vals):
+        if not self.env['base']._is_origin_accepted():
+            raise ValidationError(_("Kafka message publishing is blocked: current instance origin does not match accepted_origin setting."))
         record = super().create(vals)
         # Process in background after the transaction has successfully committed
         self.env.cr.postcommit.add(

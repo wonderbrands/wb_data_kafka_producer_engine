@@ -8,6 +8,9 @@
         <field name="arch" type="xml">
             <list>
                 <field name="model" />
+                <field name="active" widget="boolean_toggle" />
+                <field name="api_like" />
+                <field name="schema_like" />
             </list>
         </field>
     </record>
@@ -18,8 +21,14 @@
         <field name="arch" type="xml">
             <form>
                 <sheet>
+                    <widget name="web_ribbon" title="Archived" bg_color="text-bg-danger" invisible="active"/>
                     <group>
-                        <field name="model" />
+                        <group>
+                            <field name="model" />
+                        </group>
+                        <group>
+                            <field name="active" widget="boolean_toggle" />
+                        </group>
                     </group>
                     <group name="bootstrap_servers" string="Bootstrap Servers">
                         <field name="use_uniques_bss" />

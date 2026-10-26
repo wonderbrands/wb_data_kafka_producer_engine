@@ -77,6 +77,46 @@ class KafkaAsyncMixin(models.AbstractModel):
 
         return processed
 
+    def _is_origin_accepted(self):
+        """
+        Verify if current instance origin matches kafka_producer.accepted_origin.
+        Protects production Kafka topics from test/staging instances restored from backups.
+        """
+        Config = self.env['ir.config_parameter'].sudo()
+        accepted_origin_str = Config.get_param('kafka_producer.accepted_origin', '').strip()
+        if not accepted_origin_str:
+            return True
+
+        accepted_origins = [o.strip().rstrip('/') for o in accepted_origin_str.split(',') if o.strip()]
+        if not accepted_origins:
+            return True
+
+        base_url = Config.get_param('web.base.url', '').strip().rstrip('/')
+        request_urls = []
+        try:
+            from odoo.http import request
+            if request and hasattr(request, 'httprequest'):
+                req = request.httprequest
+                if hasattr(req, 'url_root') and req.url_root:
+                    request_urls.append(req.url_root.strip().rstrip('/'))
+                if hasattr(req, 'host_url') and req.host_url:
+                    request_urls.append(req.host_url.strip().rstrip('/'))
+                origin_header = req.headers.get('Origin')
+                if origin_header:
+                    request_urls.append(origin_header.strip().rstrip('/'))
+        except Exception:
+            pass
+
+        for accepted in accepted_origins:
+            if base_url and (base_url == accepted or base_url.startswith(accepted)):
+                return True
+            for req_url in request_urls:
+                if req_url and (req_url == accepted or req_url.startswith(accepted)):
+                    return True
+
+        _logger.info("Kafka publishing skipped: current origin (base_url: '%s') does not match accepted_origin ('%s')", base_url, accepted_origin_str)
+        return False
+
     def _background_job(self, messages, topic, operation_type, data_like):
         """Worker executed in a thread with a fresh DB cursor"""
         if not messages:
@@ -90,11 +130,10 @@ class KafkaAsyncMixin(models.AbstractModel):
                 # Use SUPERUSER_ID to avoid permission issues
                 env = api.Environment(cr, odoo.SUPERUSER_ID, {})
                 
-                # Check if topic exists/can be created (once per batch for efficiency)
+                # Check / ensure topic asynchronously so broker issues never stall message ingestion
                 full_topic = f"{topic}-_-{data_like}"
                 model_info = env["followed.model"].search([("model.model", "=", topic)], limit=1)
-                if not env["kafka.message.handler"]._ensure_topic_exists(full_topic, model_info=model_info):
-                    _logger.warning("Topic %s does not exist and could not be created. Proceeding to create records for later retry.", full_topic)
+                env["kafka.message.handler"]._ensure_topic_exists_async(full_topic, model_info=model_info)
 
                 vals_list = []
                 for msg in messages:
@@ -123,6 +162,9 @@ class KafkaAsyncMixin(models.AbstractModel):
         Prepare messages for records and submit to executor.
         For create/write, vals_list is required. For delete, pass None.
         """
+        if not self._is_origin_accepted():
+            return
+
         messages = []
         if vals_list:
             for record, vals in zip(records, vals_list):
@@ -189,7 +231,10 @@ class KafkaAsyncMixin(models.AbstractModel):
 
 
     def write(self, vals):
-        is_followed = self.env["followed.model"].sudo().search([("model.model", "=", self._name)], limit=1)
+        is_followed = self.env["followed.model"].sudo().search([
+            ("model.model", "=", self._name),
+            ("active", "=", True)
+        ], limit=1)
         res = super().write(vals) 
         
         if is_followed and res:
@@ -220,7 +265,10 @@ class KafkaAsyncMixin(models.AbstractModel):
     @api.model
     def create(self, vals):
         record = super().create(vals)
-        is_followed = self.env["followed.model"].sudo().search([("model.model", "=", self._name)], limit=1)
+        is_followed = self.env["followed.model"].sudo().search([
+            ("model.model", "=", self._name),
+            ("active", "=", True)
+        ], limit=1)
         if is_followed: 
             if is_followed.api_like:
                 try:
@@ -242,7 +290,10 @@ class KafkaAsyncMixin(models.AbstractModel):
     # Overridden unlink
     # ------------------------------
     def unlink(self):
-        is_followed = self.env["followed.model"].sudo().search([("model.model", "=", self._name)], limit=1)
+        is_followed = self.env["followed.model"].sudo().search([
+            ("model.model", "=", self._name),
+            ("active", "=", True)
+        ], limit=1)
         if is_followed:
             records_to_notify = list(self)  # copy before deletion
             result = super().unlink()
