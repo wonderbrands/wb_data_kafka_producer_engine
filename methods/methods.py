@@ -170,6 +170,11 @@ class KafkaAsyncMixin(models.AbstractModel):
             for record, vals in zip(records, vals_list):
                 if data_like == 'api_like':
                     processed_vals = self._prepare_vals(record, vals)
+                    if 'state' in record._fields and 'state' not in processed_vals:
+                        try:
+                            processed_vals['state'] = record.state
+                        except Exception:
+                            pass
                 else:
                     processed_vals = vals
                 processed_vals.update({

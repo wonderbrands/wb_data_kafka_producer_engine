@@ -15,7 +15,7 @@
     'category': 'Technical',
     'version': '19.0',
 
-    'depends': ['base'],
+    'depends': ['base', 'stock'],
 
     'external_dependencies': {
         'python': [
@@ -40,6 +40,7 @@
     'data': [
         'groups/kafka_admin.xml',
         'security/ir.model.access.csv',
+        'data/ir_cron.xml',
         'menu/root.xml',
         'views/views.xml',
         'actions/actions.xml',

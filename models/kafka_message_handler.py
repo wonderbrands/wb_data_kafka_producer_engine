@@ -142,8 +142,8 @@ class KafkaMessageHandler(models.Model):
         conf = {
             'bootstrap.servers': ','.join(brokers),
             'client.id': f"{socket.gethostname()}-{client_type}-{unique_suffix}",
-            'socket.timeout.ms': 3000,
-            'request.timeout.ms': 5000,
+            'socket.timeout.ms': 15000,
+            'request.timeout.ms': 20000,
         }
 
         auth_type = config.get('auth_type', 'sasl_scram')
@@ -247,8 +247,7 @@ class KafkaMessageHandler(models.Model):
 
         try:
             admin_client = AdminClient(conf)
-            topics_metadata = admin_client.list_topics(timeout=3.0)
-            self._record_broker_success()
+            topics_metadata = admin_client.list_topics(timeout=10.0)
 
             existing_topics = topics_metadata.topics
             if topic_name in existing_topics:
@@ -262,7 +261,7 @@ class KafkaMessageHandler(models.Model):
 
             try:
                 topic = NewTopic(topic_name, num_partitions=1, replication_factor=replication_factor)
-                futures = admin_client.create_topics([topic], operation_timeout=5.0)
+                futures = admin_client.create_topics([topic], operation_timeout=10.0)
                 for t, future in futures.items():
                     future.result()
                 KafkaMessageHandler._known_topics.add(topic_name)
@@ -272,7 +271,7 @@ class KafkaMessageHandler(models.Model):
                 _logger.warning("Failed to create topic %s with rf=%s: %s. Retrying with rf=1", topic_name, replication_factor, e)
                 try:
                     topic = NewTopic(topic_name, num_partitions=1, replication_factor=1)
-                    futures = admin_client.create_topics([topic], operation_timeout=5.0)
+                    futures = admin_client.create_topics([topic], operation_timeout=10.0)
                     for t, future in futures.items():
                         future.result()
                     KafkaMessageHandler._known_topics.add(topic_name)
@@ -282,8 +281,8 @@ class KafkaMessageHandler(models.Model):
                     _logger.error("Failed to create topic %s with rf=1: %s", topic_name, e2)
                     return False
         except Exception as e:
-            self._record_broker_failure(e)
-            _logger.error("Error in _ensure_topic_exists for %s: %s", topic_name, e)
+            # Metadata check failure should NOT trip the producer circuit breaker
+            _logger.warning("Warning in _ensure_topic_exists for %s (broker may auto-create): %s", topic_name, e)
             return False
 
     # ---------------------------------------------------------
@@ -340,7 +339,7 @@ class KafkaMessageHandler(models.Model):
 
         for producer in producers_to_flush:
             try:
-                producer.flush(timeout=3.0)
+                producer.flush(timeout=10.0)
                 self._record_broker_success()
             except Exception as flush_err:
                 self._record_broker_failure(flush_err)
@@ -348,50 +347,95 @@ class KafkaMessageHandler(models.Model):
 
         return records
 
-    def action_retry(self):
-        records_not_sent = self.search([('sent_status', '!=', 'sent')])
-        if not records_not_sent:
-            raise UserError("No records to retry")
+    def _retry_records(self, records):
+        """Batch retry helper for Kafka messages."""
+        if not records:
+            return 0
 
         if self._is_circuit_open():
             raise UserError(f"Cannot retry now: Kafka Broker is unreachable (Circuit Breaker active: {self._broker_status['failure_message']}). Please retry later.")
 
-        for record in records_not_sent:
+        producers_to_flush = set()
+        succeeded_records = []
+
+        for record in records:
             model_name = record.topic.split('-_-')[0] if record.topic else False
             model_info = self.env["followed.model"].sudo().search([("model.model", "=", model_name)], limit=1)
 
             kafka = self._get_producer(model_info=model_info)
-            if kafka and kafka['producer']:
+            if kafka and kafka.get('producer'):
+                producer = kafka['producer']
                 try:
-                    kafka['producer'].produce(
+                    producer.produce(
                         topic=record.topic,
                         value=record.message.encode('utf-8') if record.message else b'',
                         key=record.operation_type.encode('utf-8') if record.operation_type else None
                     )
-                    kafka['producer'].flush(timeout=3.0)
-                    self._record_broker_success()
-                    record.sent_status = 'sent'
-                    record.sent_date = datetime.now()
-
-                    current_error = record.error_message or ''
-                    log_msg = f"Reenviado con éxito el {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                    record.error_message = f"{current_error}\n{log_msg}" if current_error else log_msg
-
-                    try:
-                        if record.message:
-                            msg_data = json.loads(record.message)
-                            if isinstance(msg_data, str):
-                                msg_data = json.loads(msg_data)
-                            if isinstance(msg_data, dict) and 'odoo_internal_id' in msg_data:
-                                record.message = str(msg_data['odoo_internal_id'])
-                    except Exception as json_err:
-                        _logger.warning("Could not parse message or find odoo_internal_id on retry success: %s", json_err)
+                    producers_to_flush.add(producer)
+                    succeeded_records.append(record)
                 except Exception as e:
                     self._record_broker_failure(e)
                     record.sent_status = 'failed'
                     current_error = record.error_message or ''
                     log_msg = f"Intento de reenvío fallido el {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}: {e}"
                     record.error_message = f"{current_error}\n{log_msg}" if current_error else log_msg
+            else:
+                record.sent_status = 'not_configured'
+                if kafka:
+                    record.error_message = kafka.get('message')
+
+        for producer in producers_to_flush:
+            try:
+                producer.flush(timeout=10.0)
+                self._record_broker_success()
+            except Exception as flush_err:
+                self._record_broker_failure(flush_err)
+                _logger.error("Error flushing Kafka producer during retry: %s", flush_err)
+
+        for record in succeeded_records:
+            record.sent_status = 'sent'
+            record.sent_date = datetime.now()
+            current_error = record.error_message or ''
+            log_msg = f"Reenviado con éxito el {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            record.error_message = f"{current_error}\n{log_msg}" if current_error else log_msg
+            try:
+                if record.message:
+                    msg_data = json.loads(record.message)
+                    if isinstance(msg_data, str):
+                        msg_data = json.loads(msg_data)
+                    if isinstance(msg_data, dict) and 'odoo_internal_id' in msg_data:
+                        record.message = str(msg_data['odoo_internal_id'])
+            except Exception:
+                pass
+
+        return len(succeeded_records)
+
+    def action_retry(self):
+        records = self if self else self.search([('sent_status', '!=', 'sent')], limit=500)
+        if not records:
+            raise UserError("No records to retry")
+
+        count = self._retry_records(records)
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Kafka Retry',
+                'message': f'{count} mensajes procesados exitosamente.',
+                'sticky': False,
+            }
+        }
+
+    @api.model
+    def cron_retry_pending(self, batch_size=300):
+        """Cron job executing in background every 5 minutes to drain pending/failed records"""
+        if self._is_circuit_open():
+            _logger.info("Kafka cron retry skipped: Circuit Breaker active")
+            return
+        pending = self.search([('sent_status', '!=', 'sent')], order='id asc', limit=batch_size)
+        if pending:
+            _logger.info("Kafka cron retrying %s pending messages", len(pending))
+            self._retry_records(pending)
 
     # ---------------------------------------------------------
     # Frontend Owl Component Queries
